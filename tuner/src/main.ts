@@ -18,7 +18,7 @@ import { toSounding, type PracticeExercise } from './generator'
 import { ExerciseQueue, bridgeStorage, loadInstrument } from './queue'
 import { buildQueueWithAgent } from './creao'
 import { applyRun, initialLevel, scorePercent, PASS_AT, MAX_TRIES, type LevelState } from './leveling'
-import { PROXY_URL, DEFAULT_INSTRUMENT, BUFFER_MAX_MS } from './config'
+import { PROXY_URL, CREAO_KEY, CREAO_APP_ID, DEFAULT_INSTRUMENT, BUFFER_MAX_MS } from './config'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
@@ -112,9 +112,10 @@ const bufferMs = (ms: number) => {
 setStatus('paused', 'Getting your music ready…')
 if (created === 0) bufferMs(0)
 let queue: ExerciseQueue
-if (PROXY_URL) {
+if (PROXY_URL || CREAO_KEY) {
   const built = await buildQueueWithAgent(INSTRUMENT, storage, {
     proxyUrl: PROXY_URL,
+    direct: !PROXY_URL && CREAO_KEY ? { key: CREAO_KEY, appId: CREAO_APP_ID } : undefined,
     maxWaitMs: BUFFER_MAX_MS,
     onBuffering: ms => bufferMs(ms),
   })
