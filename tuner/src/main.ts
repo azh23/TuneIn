@@ -7,13 +7,13 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import { detectPitch, rms } from './pitch/detector'
 import { freqToNote } from './pitch/notes'
-import { mountUi, setStatus, setNote, setDebug, setProgress, setLastRun } from './ui'
-import { BOX_W, BOX_PAD, tunerText, countInText, resultsText } from './glasses'
+import { mountUi, setStatus, setNote, setDebug, setProgress, setLastRun, setBeat } from './ui'
+import { BOX_W, BOX_PAD, BEAT_BOX_W, tunerText, countInText, resultsText, beatText } from './glasses'
 import { SheetDisplay, sheetBox } from './sheet'
 import { RHYTHM_TEST } from './exercises'
 import { Session, applySession, loadProgress, saveProgress, type Summary } from './scoring'
 import { midiName } from './pitch/notes'
-import { CountIn, unlockAudio } from './metronome'
+import { CountIn } from './metronome'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
@@ -29,8 +29,12 @@ const COUNT_IN_BEATS = 4
 const BPM_STEP = 5
 const BPM_MIN = 40
 const BPM_MAX = 160
-let bpm = 60
-const readyHint = () => `Tap to start · ${bpm} bpm`
+// null = free tempo: no count-in or beat, and rhythm is graded on note
+// proportions at whatever tempo the player picks. It sits one step below
+// BPM_MIN on the swipe scale: … 45 · 40 · Free.
+let bpm: number | null = 60
+const tempoLabel = () => (bpm === null ? 'free tempo' : `${bpm} bpm`)
+const readyHint = () => `Tap to start · ${tempoLabel()}`
 const IDLE_TEXT = tunerText(null, null, readyHint())
 
 mountUi()
@@ -53,8 +57,24 @@ const noteBox = new TextContainerProperty({
   isEventCapture: 1,
 })
 
+// Small one-line box in the top-right corner (beside the staff image) that
+// pulses the beat while playing.
+const beatBox = new TextContainerProperty({
+  xPosition: 576 - BEAT_BOX_W - 4,
+  yPosition: 4,
+  width: BEAT_BOX_W,
+  height: 27 + 2 * BOX_PAD,
+  borderWidth: 0,
+  borderColor: 5,
+  paddingLength: BOX_PAD,
+  containerID: 3,
+  containerName: 'beat',
+  content: ' ',
+  isEventCapture: 0,
+})
+
 const created = await bridge.createStartUpPageContainer(
-  new CreateStartUpPageContainer({ containerTotalNum: 2, textObject: [noteBox], imageObject: [sheetBox] }),
+  new CreateStartUpPageContainer({ containerTotalNum: 3, textObject: [noteBox, beatBox], imageObject: [sheetBox] }),
 )
 if (created !== 0) {
   setStatus('error', `createStartUpPageContainer failed: ${created}`)
@@ -71,7 +91,7 @@ const IGNORE_OCTAVE = true
 // ready → (tap) → countIn → playing → results → (tap) → countIn …
 type Phase = 'ready' | 'countIn' | 'playing' | 'results'
 let phase: Phase = 'ready'
-const newSession = () => new Session(EXERCISE.notes, IGNORE_OCTAVE, 60000 / bpm)
+const newSession = () => new Session(EXERCISE.notes, IGNORE_OCTAVE, bpm === null ? undefined : 60000 / bpm)
 let session = newSession()
 let resultsContent = ''
 let countInContent = ''
@@ -95,6 +115,8 @@ function finishSession() {
   const s = session.summary()
   progress = applySession(progress, s)
   void saveProgress(bridge, progress)
+  countIn.cancel()
+  showBeat(null)
   resultsContent = resultsText(s)
   setLastRun(lastRunText(s))
   setPhase('results')
@@ -102,8 +124,9 @@ function finishSession() {
 
 function lastRunText(s: Summary): string {
   const r = s.rhythm
-  if (!r) return `+${s.points} pts · avg ${s.avgCents}¢ off · ${s.wrongNotes} wrong`
-  let text = `+${s.points} pts · avg ${s.avgCents}¢ off · ${s.wrongNotes} wrong · rhythm ${r.score}% (played ~${r.bpm} BPM, target ${bpm})`
+  const pts = `+${s.points} pts (pitch ${s.pitchPoints} + rhythm ${s.rhythmPoints}${s.perfect ? ' + perfect 20' : ''})`
+  if (!r) return `${pts} · avg ${s.avgCents}¢ off · ${s.wrongNotes} wrong`
+  let text = `${pts} · avg ${s.avgCents}¢ off · ${s.wrongNotes} wrong · rhythm ${r.score}% (played ~${r.bpm} BPM${bpm === null ? '' : `, target ${bpm}`})`
   if (r.worst !== null) {
     const n = r.notes[r.worst]
     const name = midiName(EXERCISE.notes[r.worst].midi)
@@ -113,10 +136,10 @@ function lastRunText(s: Summary): string {
 }
 
 const HINTS: Record<Phase, () => string> = {
-  ready: () => `Ready · ${bpm} BPM · tap to start · swipe to change tempo · double-tap to exit`,
+  ready: () => `Ready · ${tempoLabel()} · tap to start · swipe to change tempo · double-tap to exit`,
   countIn: () => 'Count-in… · tap to cancel',
   playing: () => 'Playing · tap to stop · double-tap to restart',
-  results: () => `Done · tap to go again at ${bpm} BPM · swipe to change tempo`,
+  results: () => `Done · tap to go again (${tempoLabel()}) · swipe to change tempo`,
 }
 
 function setPhase(p: Phase) {
@@ -124,9 +147,22 @@ function setPhase(p: Phase) {
   setStatus(p === 'countIn' || p === 'playing' ? 'listening' : 'paused', HINTS[p]())
 }
 
+let lastBeat = ' '
+/** Show beat `n` of the bar in the corner (glasses + phone); null clears it.
+ *  Sent right away, not debounced, so it lands on the beat. */
+function showBeat(n: number | null) {
+  const beats = EXERCISE.timeSig[0]
+  setBeat(n, beats)
+  const content = beatText(n, beats)
+  if (content === lastBeat) return
+  lastBeat = content
+  void bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 3, containerName: 'beat', content }))
+}
+
 /** Back to the start: fresh run, waiting for a tap. */
 function resetToReady() {
   countIn.cancel()
+  showBeat(null)
   session = newSession()
   setLastRun(null)
   setPhase('ready')
@@ -138,12 +174,19 @@ function startCountIn() {
   session = newSession()
   setLastRun(null)
   drawSheet()
+  if (bpm === null) {
+    // Free tempo: no count-in, just start listening.
+    setPhase('playing')
+    updateGlassesText(true)
+    return
+  }
+  const tempo = bpm
   setPhase('countIn')
   countIn.start(
-    bpm,
+    tempo,
     COUNT_IN_BEATS,
     n => {
-      countInContent = countInText(n, COUNT_IN_BEATS, bpm)
+      countInContent = countInText(n, COUNT_IN_BEATS, tempo)
       setStatus('listening', `Count-in · ${n}`)
       updateGlassesText(true)
     },
@@ -151,11 +194,14 @@ function startCountIn() {
       setPhase('playing')
       updateGlassesText(true)
     },
+    n => showBeat(n),
   )
 }
 
 function changeTempo(delta: number) {
-  bpm = Math.max(BPM_MIN, Math.min(BPM_MAX, bpm + delta))
+  if (bpm === null) bpm = delta > 0 ? BPM_MIN : null
+  else if (bpm + delta < BPM_MIN) bpm = null
+  else bpm = Math.min(BPM_MAX, bpm + delta)
   session = newSession() // the tempo is baked into grading
   setStatus('paused', HINTS[phase]())
   updateGlassesText()
@@ -285,8 +331,6 @@ function analyze() {
 // ready, and only the playing phase feeds the grader.
 await bridge.audioControl(true)
 setPhase('ready')
-// Click sounds need a user gesture on the phone page before they can play.
-document.addEventListener('pointerdown', unlockAudio)
 
 let cleanedUp = false
 function cleanup() {
@@ -314,7 +358,7 @@ function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeLis
 //   • Taps/double-taps/lifecycle come through `event.sysEvent`.
 //     Audio PCM frames come through `event.audioEvent` — separate branch.
 //   • Tap = start (count-in) / stop. Swipe up/down = tempo ±5 BPM when not
-//     playing.
+//     playing; one step below the minimum is free tempo (no metronome).
 //   • Double-tap goes back to ready. When already ready it calls
 //     `shutDownPageContainer(1)` instead, so double-tapping twice always
 //     exits. It's a root-level check: it must fire no matter which envelope

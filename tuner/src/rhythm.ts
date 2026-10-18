@@ -10,8 +10,10 @@
 export interface RhythmNote {
   /** Written length in beats. */
   expected: number
-  /** Length actually played, in beats at the inferred tempo. */
+  /** Length actually played, in beats at the grading tempo. */
   played: number
+  /** 0–1: full within FULL_CREDIT of the written length, 0 past ZERO_CREDIT. */
+  credit: number
 }
 
 export interface RhythmSummary {
@@ -57,9 +59,9 @@ export function gradeRhythm(onsetsMs: number[], beats: number[], fixedMsPerBeat?
   const tempo = fixedMsPerBeat ?? playedTempo
   const iois = Array.from({ length: n }, (_, i) => onsetsMs[i + 1] - onsetsMs[i])
 
-  const notes = iois.map((ioi, i) => ({ expected: beats[i], played: ioi / tempo }))
-  const errors = notes.map(r => Math.abs(r.played / r.expected - 1))
   const credit = (e: number) => Math.max(0, Math.min(1, (ZERO_CREDIT - e) / (ZERO_CREDIT - FULL_CREDIT)))
+  const errors = iois.map((ioi, i) => Math.abs(ioi / tempo / beats[i] - 1))
+  const notes = iois.map((ioi, i) => ({ expected: beats[i], played: ioi / tempo, credit: credit(errors[i]) }))
   const worstIdx = errors.reduce((w, e, i) => (e > errors[w] ? i : w), 0)
 
   return {

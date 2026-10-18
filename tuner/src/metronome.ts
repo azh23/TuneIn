@@ -1,35 +1,5 @@
-// Count-in: "1 2 3 4" on the beat before the player starts.
-//
-// Clicks play on the phone (the glasses have no speaker) and are scheduled
-// on the Web Audio clock, so they're sample-accurate. Visual beats use
-// timers aimed at absolute times, so they don't drift. Clicks only happen
-// during the count-in, never while the mic is grading the player.
-
-let ctx: AudioContext | null = null
-
-/** Browsers only allow audio after a user gesture on the page. Call this from
- *  a tap on the phone screen; until then the count-in is visual only. */
-export function unlockAudio() {
-  try {
-    ctx ??= new AudioContext()
-    if (ctx.state === 'suspended') void ctx.resume()
-  } catch {
-    ctx = null
-  }
-}
-
-function scheduleClick(at: number, accent: boolean) {
-  if (!ctx || ctx.state !== 'running') return
-  const osc = ctx.createOscillator()
-  const gain = ctx.createGain()
-  osc.frequency.value = accent ? 1600 : 1000
-  gain.gain.setValueAtTime(0.0001, at)
-  gain.gain.exponentialRampToValueAtTime(0.6, at + 0.002)
-  gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.05)
-  osc.connect(gain).connect(ctx.destination)
-  osc.start(at)
-  osc.stop(at + 0.06)
-}
+// Count-in: "1 2 3 4" on the beat before the player starts. Visual only —
+// beats are timers aimed at absolute times, so they don't drift.
 
 export class CountIn {
   private timers: number[] = []
@@ -37,18 +7,30 @@ export class CountIn {
   /**
    * Counts `beats` beats at `bpm`. `onBeat(n)` fires on each beat (1-based);
    * `onDone` fires one beat after the last count — the moment to start playing.
+   * If `onPlayBeat` is given, beats keep coming on the same grid after that
+   * with `n` = position in the bar (1..beats), until `cancel()`.
    */
-  start(bpm: number, beats: number, onBeat: (n: number) => void, onDone: () => void) {
+  start(
+    bpm: number,
+    beats: number,
+    onBeat: (n: number) => void,
+    onDone: () => void,
+    onPlayBeat?: (n: number) => void,
+  ) {
     this.cancel()
-    unlockAudio()
     const beatMs = 60000 / bpm
-    const t0 = performance.now() + 100 // small lead so beat 1 isn't clipped
-    const audioT0 = ctx ? ctx.currentTime + 0.1 : 0
-    for (let i = 0; i < beats; i++) {
-      scheduleClick(audioT0 + (i * beatMs) / 1000, i === 0)
-      this.at(t0 + i * beatMs, () => onBeat(i + 1))
+    const t0 = performance.now() + 100 // small lead before beat 1
+    for (let i = 0; i < beats; i++) this.at(t0 + i * beatMs, () => onBeat(i + 1))
+    // Each play beat schedules the next one, always aimed at t0 + k·beat so
+    // timer lateness never accumulates.
+    const playBeat = (k: number) => {
+      this.at(t0 + k * beatMs, () => {
+        if (k === beats) onDone()
+        onPlayBeat?.(((k - beats) % beats) + 1)
+        if (onPlayBeat) playBeat(k + 1)
+      })
     }
-    this.at(t0 + beats * beatMs, onDone)
+    playBeat(beats)
   }
 
   cancel() {
@@ -57,6 +39,8 @@ export class CountIn {
   }
 
   private at(time: number, fn: () => void) {
+    // Drop timers that already fired so the list doesn't grow while playing.
+    this.timers = this.timers.slice(-8)
     this.timers.push(window.setTimeout(fn, Math.max(0, time - performance.now())))
   }
 }

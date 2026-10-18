@@ -51,6 +51,13 @@ export function countInText(n: number, beats: number, bpm: number): string {
   return [center(String(n)), center(dots), center(`${bpm} bpm`)].join('\n')
 }
 
+/** Corner beat indicator: one dot per beat in the bar, current one filled. */
+export const BEAT_BOX_W = 112
+export function beatText(n: number | null, beats: number): string {
+  if (n === null) return ' ' // a text container can't be empty
+  return Array.from({ length: beats }, (_, i) => (i === n - 1 ? '●' : '○')).join(' ')
+}
+
 export function pausedText(): string {
   return [center('Paused'), center(scale(null)), center('Tap to resume')].join('\n')
 }
