@@ -17,6 +17,7 @@ export interface RenderOptions {
   timeSig?: [number, number] // shown only when showTimeSig is true
   showTimeSig?: boolean
   current?: number // index of the note to play now (bright + marker)
+  currentHeld?: boolean // the current note is being played right now (filled marker; outline while waiting)
   // Notes before `current` are drawn dim, notes after are drawn bright.
   letters?: boolean // draw note names under the staff (good for beginners)
   barsPerPage?: number // purely informational, used for the bar line count
@@ -293,8 +294,9 @@ export function renderStaff(ctx: Ctx, notes: StaffNote[], opts: RenderOptions = 
   if (cur >= 0 && cur < lay.placed.length) {
     const p = lay.placed[cur]
     const my = 18
-    ctx.fillStyle = grey(LV.marker)
-    ctx.beginPath(); ctx.moveTo(p.x, my + 6); ctx.lineTo(p.x - 6, my - 4); ctx.lineTo(p.x + 6, my - 4); ctx.closePath(); ctx.fill()
+    ctx.beginPath(); ctx.moveTo(p.x, my + 6); ctx.lineTo(p.x - 6, my - 4); ctx.lineTo(p.x + 6, my - 4); ctx.closePath()
+    if (opts.currentHeld) { ctx.fillStyle = grey(LV.marker); ctx.fill() }
+    else { ctx.strokeStyle = grey(LV.marker); ctx.lineWidth = 1.6; ctx.stroke() }
   }
 
   if (opts.letters) {
