@@ -46,3 +46,12 @@ export function tunerText(note: string | null, cents: number | null): string {
 export function pausedText(): string {
   return [center('Paused'), center(scale(null)), center('Tap to resume')].join('\n')
 }
+
+/** Shown on the glasses when a run is finished. Three short lines. */
+export function resultsText(avgCents: number, wrongNotes: number, points: number): string {
+  return [
+    center('Scale done!'),
+    center(`avg ${avgCents}¢ off  ·  ${wrongNotes} wrong`),
+    center(`+${points} pts  ·  tap to retry`),
+  ].join('\n')
+}
