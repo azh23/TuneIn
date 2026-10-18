@@ -4,6 +4,8 @@
 // CanvasRenderingContext2D, then quantizes to 16 grey levels.
 // Size budget from the workshop slide: 288x144, 4-bit greyscale.
 
+import type { Clef } from './instruments'
+
 export const W = 288
 export const H = 144
 
@@ -21,6 +23,7 @@ export interface RenderOptions {
   // Notes before `current` are drawn dim, notes after are drawn bright.
   letters?: boolean // draw note names under the staff (good for beginners)
   barsPerPage?: number // purely informational, used for the bar line count
+  clef?: Clef
 }
 
 // Brightness levels (0-15), mapped to the display's 16 green levels.
@@ -28,7 +31,20 @@ const LV = { off: 0, staff: 7, dim: 6, note: 15, marker: 15, text: 11 }
 
 const SP = 10 // staff space (px between lines)
 const STAFF_BOTTOM = 96 // y of the bottom line (E4)
-const E4_DIA = 30 // diatonic index: octave*7 + letter(C=0..B=6)
+
+// Diatonic index (octave*7 + letter, C=0) of the BOTTOM staff line for each clef.
+const BOTTOM_DIA: Record<Clef, number> = {
+  treble: 30, // E4
+  bass: 18,   // G2
+  alto: 24,   // F3
+}
+// Key-signature symbols sit a little lower than the treble pattern in these clefs.
+const KEY_SHIFT: Record<Clef, number> = { treble: 0, bass: -2, alto: -1 }
+
+// Set once at the start of renderStaff. Rendering is synchronous, so a module variable is safe.
+let bottomDia = BOTTOM_DIA.treble
+let keyShift = 0
+
 const HEAD_RX = 6.2
 const HEAD_RY = 4.4
 const STEM_LEN = 30
@@ -65,7 +81,7 @@ function spell(midi: number, key: number): Spelled {
   return { dia: oct * 7 + letterIdx, acc, letter: LETTERS[letterIdx] }
 }
 
-const yOf = (dia: number) => STAFF_BOTTOM - ((dia - E4_DIA) * SP) / 2
+const yOf = (dia: number) => STAFF_BOTTOM - ((dia - bottomDia) * SP) / 2
 const grey = (level: number) => {
   const v = Math.round((level / 15) * 255)
   return `rgb(${v},${v},${v})`
@@ -142,7 +158,8 @@ function drawAcc(ctx: Ctx, acc: number, x: number, y: number, level: number) {
 function drawKeySignature(ctx: Ctx, key: number, x: number): number {
   const n = Math.abs(key)
   for (let i = 0; i < n; i++) {
-    const dia = key > 0 ? SHARP_DIA[i] : FLAT_DIA[i]
+    const trebleDia = key > 0 ? SHARP_DIA[i] : FLAT_DIA[i]
+    const dia = trebleDia - BOTTOM_DIA.treble + bottomDia + keyShift
     drawAcc(ctx, key > 0 ? 1 : -1, x + i * 9, yOf(dia), LV.note)
   }
   return n * 9
@@ -198,8 +215,10 @@ function drawNote(ctx: Ctx, p: Placed, level: number, stemDown: boolean, withSte
   const y = yOf(p.sp.dia)
   const { beats } = p.note
   // ledger lines
-  if (p.sp.dia <= 28) for (let d = 28; d >= p.sp.dia; d -= 2) line(ctx, p.x - 10, yOf(d), p.x + 10, yOf(d), 1.6, LV.staff + 2)
-  if (p.sp.dia >= 40) for (let d = 40; d <= p.sp.dia; d += 2) line(ctx, p.x - 10, yOf(d), p.x + 10, yOf(d), 1.6, LV.staff + 2)
+  const lowLedger = bottomDia - 2 // first ledger line below the staff
+  const highLedger = bottomDia + 10 // first ledger line above the staff
+  if (p.sp.dia <= lowLedger) for (let d = lowLedger; d >= p.sp.dia; d -= 2) line(ctx, p.x - 10, yOf(d), p.x + 10, yOf(d), 1.6, LV.staff + 2)
+  if (p.sp.dia >= highLedger) for (let d = highLedger; d <= p.sp.dia; d += 2) line(ctx, p.x - 10, yOf(d), p.x + 10, yOf(d), 1.6, LV.staff + 2)
   // accidental
   if (p.showAcc !== null) drawAcc(ctx, p.showAcc, p.x - 15, y, level)
   // head
@@ -224,11 +243,18 @@ export function renderStaff(ctx: Ctx, notes: StaffNote[], opts: RenderOptions = 
   ctx.fillStyle = grey(LV.off)
   ctx.fillRect(0, 0, W, H)
 
+    const clef: Clef = opts.clef ?? 'treble'
+  bottomDia = BOTTOM_DIA[clef]
+  keyShift = KEY_SHIFT[clef]
+
   const clefX = 18
   drawStaffLines(ctx, 4, W - 4)
-  drawTrebleClef(ctx, clefX)
-  let x = clefX + 20
+  if (clef === 'bass') drawBassClef(ctx, clefX)
+  else if (clef === 'alto') drawAltoClef(ctx, clefX)
+  else drawTrebleClef(ctx, clefX)
+  let x = clefX + (clef === 'bass' ? 26 : 20)
   x += drawKeySignature(ctx, key, x) + 4
+
   if (opts.showTimeSig) {
     const [n, d] = opts.timeSig ?? [4, 4]
     ctx.fillStyle = grey(LV.note)
@@ -238,6 +264,45 @@ export function renderStaff(ctx: Ctx, notes: StaffNote[], opts: RenderOptions = 
     ctx.fillText(String(d), x + 8, STAFF_BOTTOM - 3 + 0)
     x += 20
   }
+
+  function drawBassClef(ctx: Ctx, x: number) {
+  const u = SP
+  const Fy = STAFF_BOTTOM - 3 * u // the F line (4th line from the bottom)
+  const X = (v: number) => x + v * u
+  const Y = (v: number) => Fy - v * u // v>0 is up
+  ctx.strokeStyle = grey(LV.note)
+  ctx.fillStyle = grey(LV.note)
+  ctx.lineWidth = 2.4
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  ctx.moveTo(X(0), Y(0))
+  ctx.bezierCurveTo(X(0.9), Y(0.9), X(2.1), Y(0.2), X(1.8), Y(-0.8))
+  ctx.bezierCurveTo(X(1.5), Y(-1.8), X(0.7), Y(-2.4), X(-0.3), Y(-2.9))
+  ctx.stroke()
+  ctx.beginPath(); ctx.arc(X(0), Y(0), 3.3, 0, Math.PI * 2); ctx.fill() // head
+  ctx.beginPath(); ctx.arc(X(2.4), Y(0.5), 1.5, 0, Math.PI * 2); ctx.fill() // dots either side of F
+  ctx.beginPath(); ctx.arc(X(2.4), Y(-0.5), 1.5, 0, Math.PI * 2); ctx.fill()
+}
+
+function drawAltoClef(ctx: Ctx, x: number) {
+  const u = SP
+  const Cy = STAFF_BOTTOM - 2 * u // the middle line (middle C)
+  const X = (v: number) => x + v * u
+  const Y = (v: number) => Cy + v * u // v>0 is down
+  line(ctx, X(-1), Y(-2), X(-1), Y(2), 3.6, LV.note) // thick bar
+  line(ctx, X(-0.4), Y(-2), X(-0.4), Y(2), 1.2, LV.note) // thin bar
+  ctx.strokeStyle = grey(LV.note)
+  ctx.lineWidth = 2.2
+  ctx.lineCap = 'round'
+  ctx.beginPath() // upper bowl, tip meets the middle line
+  ctx.moveTo(X(-0.4), Y(-1.9))
+  ctx.bezierCurveTo(X(1.6), Y(-1.9), X(1.7), Y(-0.1), X(0.5), Y(-0.1))
+  ctx.stroke()
+  ctx.beginPath() // lower bowl
+  ctx.moveTo(X(-0.4), Y(1.9))
+  ctx.bezierCurveTo(X(1.6), Y(1.9), X(1.7), Y(0.1), X(0.5), Y(0.1))
+  ctx.stroke()
+}
 
   const lay = layout(notes, key, x, W - 6, barBeats)
   if (!lay) return { ok: false, reason: 'too many notes for one image; use fewer bars per page' }
@@ -262,7 +327,7 @@ export function renderStaff(ctx: Ctx, notes: StaffNote[], opts: RenderOptions = 
   for (const g of groups) {
     if (g.length < 2) continue
     const avgDia = g.reduce((a, i) => a + lay.placed[i].sp.dia, 0) / g.length
-    const down = avgDia >= 34
+    const down = avgDia >= bottomDia + 4
     const pts = g.map(i => {
       const p = lay.placed[i]
       const y = yOf(p.sp.dia)
@@ -276,7 +341,7 @@ export function renderStaff(ctx: Ctx, notes: StaffNote[], opts: RenderOptions = 
 
   lay.placed.forEach(p => {
     if (used.has(p.idx)) return
-    const down = p.sp.dia >= 34
+    const down = p.sp.dia >= bottomDia + 4
     drawNote(ctx, p, levelOf(p.idx), down, true)
     if (p.note.beats === 0.5) { // lone eighth: flag
       const sx = down ? p.x - HEAD_RX + 0.8 : p.x + HEAD_RX - 0.8

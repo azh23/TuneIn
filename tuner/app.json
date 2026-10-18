@@ -7,8 +7,20 @@
   "min_sdk_version": "0.0.10",
   "entrypoint": "index.html",
   "permissions": [
-    { "name": "g2-microphone", "desc": "Capture audio from the glasses mic to detect pitch." },
-    { "name": "network", "desc": "Fetch practice exercises", "whitelist": ["https://agent.creao.ai"] }
+    {
+      "name": "g2-microphone",
+      "desc": "Capture audio from the glasses mic to detect pitch."
+    },
+    {
+      "name": "network",
+      "desc": "Fetch practice exercises",
+      "whitelist": ["https://agent.creao.ai"]
+    },
+    {
+      "name": "ngrok",
+      "desc": "static ngrok tunnel for photon/elevenlabs",
+      "whitelist": ["https://pucker-shucking-suffrage.ngrok-free.dev"]
+    }
   ],
   "supported_languages": ["en"]
 }

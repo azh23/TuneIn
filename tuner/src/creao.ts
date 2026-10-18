@@ -100,6 +100,7 @@ export function sanitizeAgentExercises(raw: unknown, inst: Instrument): Practice
       notes,
       transpose: inst.transpose,
       source: 'creao',
+      clef: inst.clef,
     }
     if (seen.has(ex.id) || validateExercise(ex, inst).length) continue
     seen.add(ex.id)

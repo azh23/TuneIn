@@ -3,7 +3,7 @@
 // toSounding(), because the mic hears sounding pitch (trumpet/clarinet/sax/guitar differ).
 
 import type { StaffNote } from './staff'
-import { type Instrument, writtenRange, MIC_MIN, MIC_MAX, STAFF_MIN, STAFF_MAX } from './instruments'
+import { type Instrument, writtenRange, MIC_MIN, MIC_MAX, STAFF_MIN, STAFF_MAX, CLEF_STAFF, type Clef } from './instruments'
 
 export interface PracticeExercise {
   id: string
@@ -17,9 +17,10 @@ export interface PracticeExercise {
   transpose: number // sounding - written
   /** Where it came from. Missing means generated locally by the rules. */
   source?: 'creao' | 'local'
+  clef?: Clef
 }
 
-export const MAX_LEVEL = 10
+export const MAX_LEVEL = 3
 const ALLOWED_BEATS = [0.5, 1, 2, 4]
 
 /** Notes the player is expected to SOUND (what the mic should hear). */
@@ -170,6 +171,7 @@ function buildOne(inst: Instrument, level: number, rng: Rng): PracticeExercise |
     tempoBpm: eighths && r.kind !== 'rhythm' ? 54 : 60 + 2 * level,
     notes,
     transpose: inst.transpose,
+    clef: inst.clef, 
   }
 }
 
@@ -182,15 +184,16 @@ export function validateExercise(ex: PracticeExercise, inst: Instrument): string
   const total = ex.notes.reduce((a, n) => a + n.beats, 0)
   if (total <= 0 || total > 8) errs.push(`total length ${total} beats is outside 1-8`)
   const pcs = diatonicPcs(ex.key)
+  const [smin, smax] = CLEF_STAFF[ex.clef ?? inst.clef]
   ex.notes.forEach((n, i) => {
     if (!Number.isInteger(n.midi)) errs.push(`note ${i} is not a whole MIDI number`)
     if (n.midi < lo || n.midi > hi) errs.push(`note ${i} (${n.midi}) is outside ${inst.label} range ${lo}-${hi}`)
-    if (n.midi < STAFF_MIN || n.midi > STAFF_MAX) errs.push(`note ${i} cannot be drawn on the staff`)
     const s = n.midi + ex.transpose
     if (s < MIC_MIN || s > MIC_MAX) errs.push(`note ${i} sounds at ${s}, outside the mic range`)
     if (!ALLOWED_BEATS.includes(n.beats)) errs.push(`note ${i} has length ${n.beats}`)
     if (!pcs.has(((n.midi % 12) + 12) % 12)) errs.push(`note ${i} (${n.midi}) is not in key ${ex.key}`)
     if (i > 0 && n.midi === ex.notes[i - 1].midi) errs.push(`note ${i} repeats the previous pitch`)
+    if (n.midi < smin || n.midi > smax) errs.push(`note ${i} cannot be drawn on the staff`)
   })
   if (ex.transpose !== inst.transpose) errs.push('transposition does not match the instrument')
   return errs

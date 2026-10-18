@@ -26,6 +26,7 @@ const app = express();
 app.use("/api", (req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "ngrok-skip-browser-warning");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, ngrok-skip-browser-warning");
   if (req.method === "OPTIONS") {
     res.sendStatus(204);
     return;
@@ -95,6 +96,34 @@ app.get("/", (_req, res) => {
 app.get("/api/latest-instrument", (_req, res) => {
   res.json(latest ?? { instrument: null, userText: "", conversationId: null });
 });
+
+app.post(
+  "/api/transcribe",
+  express.raw({ type: "audio/*", limit: "5mb" }),
+  async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      res.status(400).json({ error: "no audio" });
+      return;
+    }
+    if (!process.env.ELEVENLABS_API_KEY) {
+      res.status(500).json({ error: "ELEVENLABS_API_KEY is not set" });
+      return;
+    }
+    try {
+      const result = await elevenlabs.speechToText.convert({
+        file: new Blob([req.body], { type: "audio/wav" }),
+        modelId: "scribe_v1",
+      });
+      const text = (result as any).text ?? "";
+      console.log("Heard:", text);
+      res.json({ text });
+    } catch (err) {
+      console.error("Transcription failed:", err);
+      res.status(502).json({ error: "transcription failed" });
+    }
+  }
+);
+
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () => {

@@ -68,7 +68,7 @@ export class ExerciseQueue {
     if (!inst || !raw) return null
     try {
       const s = JSON.parse(raw) as Saved
-      if (s.version !== 1 || s.instrumentId !== instrumentId || !Array.isArray(s.exercises)) return null
+      if (s.version !== 1 || s.instrumentId !== instrumentId || !Array.isArray(s.exercises) || s.exercises.length === 0) return null      
       return new ExerciseQueue(inst, storage, s.exercises, s.seen ?? [], s.batches ?? 1)
     } catch {
       return null

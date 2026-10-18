@@ -14,13 +14,13 @@ import { Session, applySession, loadProgress, saveProgress, type Summary } from 
 import { midiName } from './pitch/notes'
 import { CountIn } from './metronome'
 import { LatestWriter } from './writer'
-import { byId } from './instruments'
+import { byId, type Instrument } from './instruments'
 import { toSounding, MAX_LEVEL, type PracticeExercise } from './generator'
 import { ExerciseQueue, bridgeStorage, loadInstrument, saveInstrument } from './queue'
 import { buildQueueWithAgent, agentInfo } from './creao'
 import { applyRun, initialLevel, scorePercent, PASS_AT, MAX_TRIES, type LevelState } from './leveling'
-import { PROXY_URL, CREAO_KEY, CREAO_APP_ID, DEFAULT_INSTRUMENT, BUFFER_MAX_MS, DEMO_TOOLS } from './config'
-import { instrumentFromCall } from './voice_link'
+import { PROXY_URL, CREAO_KEY, CREAO_APP_ID, DEFAULT_INSTRUMENT, BUFFER_MAX_MS, DEMO_TOOLS, AGENT_LIMIT_MS } from './config'
+import { askInstrumentByVoice } from './instrumentPrompt'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
@@ -122,12 +122,10 @@ const statsWriter = textWriter(4, 'stats')
 
 // ── Instrument, exercise queue, level ────────────────────────────────────
 const storage = bridgeStorage(bridge)
-// The speech step saves the instrument with saveInstrument(); until then use the default.
-const fromCall = await instrumentFromCall(storage)
-if (fromCall) {
-  await saveInstrument(storage, fromCall) // check the exact signature in queue.ts
-}
-const INSTRUMENT = fromCall ?? (await loadInstrument(storage)) ?? byId(DEFAULT_INSTRUMENT) ?? byId('voice')!
+const spoken = await askInstrumentByVoice(bridge, text => noteWriter.write(text))
+if (spoken) await saveInstrument(storage, spoken)
+let INSTRUMENT = spoken ?? (await loadInstrument(storage)) ?? byId(DEFAULT_INSTRUMENT) ?? byId('voice')!
+console.log('INSTRUMENT chosen:', INSTRUMENT.id, 'spoken:', spoken?.id ?? null)
 
 const LEVEL_KEY = 'tunein.level.v1'
 async function loadLevel(): Promise<LevelState> {
@@ -149,18 +147,20 @@ const bufferMs = (ms: number) => {
 }
 setStatus('paused', 'Getting your music ready…')
 if (created === 0) bufferMs(0)
-let queue: ExerciseQueue
-if (PROXY_URL || CREAO_KEY) {
-  const built = await buildQueueWithAgent(INSTRUMENT, storage, {
-    proxyUrl: PROXY_URL,
-    direct: !PROXY_URL && CREAO_KEY ? { key: CREAO_KEY, appId: CREAO_APP_ID } : undefined,
-    maxWaitMs: BUFFER_MAX_MS,
-    onBuffering: ms => bufferMs(ms),
-  })
-  queue = built.queue
-} else {
-  queue = (await ExerciseQueue.load(storage, INSTRUMENT.id)) ?? (await ExerciseQueue.create(INSTRUMENT, storage))
+async function buildQueue(inst: Instrument): Promise<ExerciseQueue> {
+  if (PROXY_URL || CREAO_KEY) {
+    const built = await buildQueueWithAgent(inst, storage, {
+      proxyUrl: PROXY_URL,
+      direct: !PROXY_URL && CREAO_KEY ? { key: CREAO_KEY, appId: CREAO_APP_ID } : undefined,
+      maxWaitMs: AGENT_LIMIT_MS,
+      giveUpMs: AGENT_LIMIT_MS,
+      onBuffering: ms => bufferMs(ms),
+    })
+    return built.queue
+  }
+  return (await ExerciseQueue.load(storage, inst.id)) ?? (await ExerciseQueue.create(inst, storage))
 }
+let queue = await buildQueue(INSTRUMENT)
 let levelState = await loadLevel()
 
 // Best score (percent) per exercise id.
@@ -202,7 +202,7 @@ function drawSheet() {
   // The marker stays on a note while it's being held (filled) and moves on
   // when the next note starts. marker = notes.length dims every note (done).
   const { notes, key, timeSig } = EXERCISE
-  sheet.show(notes, { key, timeSig, showTimeSig: true, current: session.marker, currentHeld: session.holding, letters: true })
+  sheet.show(notes, { key, timeSig, clef: INSTRUMENT.clef ?? 'treble', showTimeSig: true, current: session.marker, currentHeld: session.holding, letters: true })
   setProgress(progress, session.marker, notes.length)
 }
 if (created === 0) drawSheet()
@@ -216,6 +216,34 @@ else setProgress(progress, session.step, EXERCISE.notes.length)
 
 /** Called right after a passed exercise was marked seen. If that was the last new exercise at this level,
  *  the level is cleared and the player moves up (don't make them repeat the same one). */
+// True while the "what do you play?" screen is up. The main event handler ignores
+// taps and audio during this time, so the prompt has the glasses to itself.
+let selecting = false
+
+async function reselectInstrument() {
+  if (selecting) return
+  selecting = true
+  countIn.cancel()
+  showBeat(null)
+  try {
+    const picked = await askInstrumentByVoice(bridge, text => noteWriter.write(text))
+    if (picked && picked.id !== INSTRUMENT.id) {
+      INSTRUMENT = picked
+      await saveInstrument(storage, picked)
+      setStatus('paused', 'Getting your music ready…')
+      bufferMs(0)
+      queue = await buildQueue(INSTRUMENT)
+      EXERCISE = queue.next(levelState.level)
+      tries = 0
+      bpm = EXERCISE.tempoBpm
+    }
+  } finally {
+    selecting = false
+  }
+  resetToReady() // redraws the sheet and tuner text for the (possibly new) exercise
+  showStats()
+}
+
 function levelClearedUp(): boolean {
   if (levelState.level >= MAX_LEVEL || queue.unseenAt(levelState.level) > 0) return false
   levelState = { level: levelState.level + 1, upStreak: 0, downStreak: 0 }
@@ -351,9 +379,9 @@ function lastRunText(s: Summary): string {
 }
 
 const HINTS: Record<Phase, () => string> = {
-  ready: () => `Level ${levelState.level} · ready · ${tempoLabel()} · tap to start · swipe to change tempo · double-tap to exit`,
+  ready: () => `Level ${levelState.level} · ready · ${tempoLabel()} · tap to start · swipe to change tempo · double-tap to change instrument`,
   countIn: () => 'Count-in… · tap to cancel',
-  playing: () => 'Playing · tap to stop · double-tap to restart',
+  playing: () => 'Playing · tap to stop · double-tap to change instrument',
   results: () => (passed ? `Passed · tap for the next exercise · ${tempoLabel()}` : `Not yet · tap to retry · ${tempoLabel()}`),
 }
 
@@ -548,19 +576,22 @@ function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeLis
 //     SYSTEM_EXIT_EVENT fires on confirm and we clean up there.
 //   • Check DOUBLE_CLICK_EVENT before CLICK_EVENT.
 const unsubscribe = bridge.onEvenHubEvent(event => {
+  const sysType = eventTypeOf(event.sysEvent)
+  const textType = eventTypeOf(event.textEvent)
+
+  if (selecting) {
+    if (sysType === OsEventTypeList.SYSTEM_EXIT_EVENT || sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT) cleanup()
+    return
+  }
+
   const pcm = event.audioEvent?.audioPcm
   if (pcm) {
     pushPcm(pcm)
     analyze()
   }
 
-  const sysType = eventTypeOf(event.sysEvent)
-  const textType = eventTypeOf(event.textEvent)
-
   if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
-    // Back to ready; if already ready there's nothing to restart, so exit.
-    if (phase !== 'ready') resetToReady()
-    else bridge.shutDownPageContainer(1)
+    void reselectInstrument()
     return
   }
 

@@ -4,7 +4,9 @@
 // "I play the trumpet". Everything after that is plain code in this file.
 
 export type InstrumentId =
-  | 'voice' | 'violin' | 'flute' | 'clarinet' | 'trumpet' | 'altosax' | 'guitar' | 'piano'
+  | 'voice' | 'violin' | 'flute' | 'clarinet' | 'trumpet' | 'altosax' | 'guitar' | 'piano' | 'cello' | 'trombone' | 'bass' | 'viola'
+
+export type Clef = 'treble' | 'bass' | 'alto'
 
 export interface Instrument {
   id: InstrumentId
@@ -14,22 +16,32 @@ export interface Instrument {
   highWritten: number
   /** sounding pitch minus written pitch. Bb trumpet/clarinet = -2, alto sax = -9, guitar = -12. */
   transpose: number
+  clef: Clef
 }
 
 export const INSTRUMENTS: Instrument[] = [
-  { id: 'voice', label: 'Voice', lowWritten: 55, highWritten: 77, transpose: 0 },
-  { id: 'violin', label: 'Violin', lowWritten: 55, highWritten: 81, transpose: 0 },
-  { id: 'flute', label: 'Flute', lowWritten: 60, highWritten: 81, transpose: 0 },
-  { id: 'clarinet', label: 'Clarinet', lowWritten: 55, highWritten: 79, transpose: -2 },
-  { id: 'trumpet', label: 'Trumpet', lowWritten: 55, highWritten: 77, transpose: -2 },
-  { id: 'altosax', label: 'Alto sax', lowWritten: 58, highWritten: 81, transpose: -9 },
-  { id: 'guitar', label: 'Guitar', lowWritten: 55, highWritten: 76, transpose: -12 },
-  { id: 'piano', label: 'Piano', lowWritten: 60, highWritten: 81, transpose: 0 },
+  { id: 'voice', label: 'Voice', lowWritten: 55, highWritten: 77, transpose: 0 , clef: 'treble'},
+  { id: 'violin', label: 'Violin', lowWritten: 55, highWritten: 81, transpose: 0, clef: 'treble' },
+  { id: 'flute', label: 'Flute', lowWritten: 60, highWritten: 81, transpose: 0 , clef: 'treble'},
+  { id: 'clarinet', label: 'Clarinet', lowWritten: 55, highWritten: 79, transpose: -2 , clef: 'treble'},
+  { id: 'trumpet', label: 'Trumpet', lowWritten: 55, highWritten: 77, transpose: -2, clef: 'treble' },
+  { id: 'altosax', label: 'Alto sax', lowWritten: 58, highWritten: 81, transpose: -9 , clef: 'treble'},
+  { id: 'guitar', label: 'Guitar', lowWritten: 55, highWritten: 76, transpose: -12, clef: 'treble' },
+  { id: 'piano', label: 'Piano', lowWritten: 60, highWritten: 81, transpose: 0, clef: 'treble' },
+  { id: 'cello', label: 'Cello', clef: 'bass', lowWritten: 40, highWritten: 62, transpose: 0 },
+  { id: 'trombone', label: 'Trombone', clef: 'bass', lowWritten: 40, highWritten: 62, transpose: 0 },
+  { id: 'bass', label: 'Bass', clef: 'bass', lowWritten: 52, highWritten: 64, transpose: -12 },
+  { id: 'viola', label: 'Viola', clef: 'alto', lowWritten: 50, highWritten: 74, transpose: 0 },
 ]
 
 /** staff.ts draws G3 (55) up to A5 (81) comfortably. */
-export const STAFF_MIN = 55
-export const STAFF_MAX = 81
+export const CLEF_STAFF: Record<Clef, [number, number]> = {
+  treble: [55, 81], // G3-A5 (your current range)
+  bass: [40, 64],   // E2-E4
+  alto: [50, 74],   // D3-D5
+}
+export const STAFF_MIN = CLEF_STAFF.treble[0] // kept so old imports still compile
+export const STAFF_MAX = CLEF_STAFF.treble[1]
 /** The pitch detector searches 60-1200 Hz; keep sounding notes well inside that. */
 export const MIC_MIN = 40
 export const MIC_MAX = 84
@@ -40,8 +52,9 @@ export function byId(id: string): Instrument | undefined {
 
 /** Written range that is safe for the staff renderer AND for the mic. */
 export function writtenRange(i: Instrument): [number, number] {
-  const lo = Math.max(i.lowWritten, STAFF_MIN, MIC_MIN - i.transpose)
-  const hi = Math.min(i.highWritten, STAFF_MAX, MIC_MAX - i.transpose)
+  const [smin, smax] = CLEF_STAFF[i.clef]
+  const lo = Math.max(i.lowWritten, smin, MIC_MIN - i.transpose)
+  const hi = Math.min(i.highWritten, smax, MIC_MAX - i.transpose)
   return [lo, hi]
 }
 
@@ -56,6 +69,10 @@ const ALIASES: Record<InstrumentId, string[]> = {
   altosax: ['alto sax', 'alto saxophone', 'saxophone', 'sax'],
   guitar: ['guitar'],
   piano: ['piano', 'keyboard', 'keys'],
+  cello: ['cello'],
+  trombone: ['trombone'],
+  viola: ['viola'],
+  bass: ['bass guitar', 'double bass', 'upright bass', 'bass'],
 }
 
 // Real instruments we cannot draw yet (bass clef / alto clef / percussion).
