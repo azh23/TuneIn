@@ -46,6 +46,8 @@ export function detectPitch(buf: Float32Array, opts: DetectorOptions): PitchResu
   }
 
   // Step 4: first dip below the threshold, then walk to its local minimum.
+  // If nothing dips that low, fall back to the global minimum and let the
+  // caller decide via `clarity` — a wavering sustained note often lands here.
   let tau = -1
   for (let t = tauMin; t <= tauMax; t++) {
     if (cmnd[t] < threshold) {
@@ -54,7 +56,10 @@ export function detectPitch(buf: Float32Array, opts: DetectorOptions): PitchResu
       break
     }
   }
-  if (tau === -1) return null
+  if (tau === -1) {
+    tau = tauMin
+    for (let t = tauMin + 1; t <= tauMax; t++) if (cmnd[t] < cmnd[tau]) tau = t
+  }
 
   // Step 5: parabolic interpolation for sub-sample precision. At 16 kHz one
   // sample of period error is tens of cents, so this step matters.
