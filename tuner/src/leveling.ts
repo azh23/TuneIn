@@ -6,7 +6,8 @@ export const PASS_AT = 0.6 // a run must reach this to unlock the next exercise
 export const MAX_TRIES = 3 // after this many misses on one exercise, drop a level so you're never stuck
 export const UP_AT = 0.85 // two runs at or above this percentage move you up
 export const DOWN_BELOW = 0.5 // two runs below this move you down
-export const RUNS_NEEDED = 2
+export const RUNS_NEEDED = 1 // runs at UP_AT or better needed to move up
+export const RUNS_NEEDED_DOWN = 2 // runs below DOWN_BELOW needed to move down
 
 export interface LevelState {
   level: number
@@ -30,7 +31,7 @@ export function applyRun(state: LevelState, pct: number): { state: LevelState; c
 
   let change: Change = 'same'
   if (upStreak >= RUNS_NEEDED && level < MAX_LEVEL) { level++; change = 'up'; upStreak = 0; downStreak = 0 }
-  else if (downStreak >= RUNS_NEEDED && level > 1) { level--; change = 'down'; upStreak = 0; downStreak = 0 }
+  else if (downStreak >= RUNS_NEEDED_DOWN && level > 1) { level--; change = 'down'; upStreak = 0; downStreak = 0 }
   else if (level === MAX_LEVEL) upStreak = Math.min(upStreak, RUNS_NEEDED)
   return { state: { level, upStreak, downStreak }, change }
 }
