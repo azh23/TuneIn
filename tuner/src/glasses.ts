@@ -57,10 +57,10 @@ export function countInText(n: number, beats: number, bpm: number): string {
 /** Corner beat indicator: one dot per beat in the bar, current one filled. */
 export const BEAT_BOX_W = 112
 
-/** Top-left corner box: level and best score on the current exercise. */
+/** Top-left corner box: the current level. */
 export const STATS_BOX_W = 136
-export function statsText(level: number, best: number | undefined): string {
-  return `Lv ${level}\nbest ${best === undefined ? '–' : `${best}%`}`
+export function statsText(level: number, _best?: number): string {
+  return `Lv ${level}`
 }
 export function beatText(n: number | null, beats: number): string {
   if (n === null) return ' ' // a text container can't be empty
