@@ -6,6 +6,7 @@ let detailEl: HTMLDivElement
 let debugEl: HTMLDivElement
 let needleEl: HTMLDivElement
 let centsEl: HTMLDivElement
+let progressEl: HTMLElement
 
 export function mountUi() {
   const app = document.querySelector<HTMLDivElement>('#app')!
@@ -29,6 +30,7 @@ export function mountUi() {
         <div id="cents" class="cents"></div>
         <div id="detail" class="detail">Play or sing a note</div>
       </section>
+      <section id="progress" class="progress" aria-live="polite"></section>
       <div id="debug" class="debug">mic: no audio yet</div>
       <footer>Tap the glasses temple to pause · double-tap to exit.</footer>
     </main>
@@ -39,6 +41,7 @@ export function mountUi() {
   debugEl = app.querySelector<HTMLDivElement>('#debug')!
   needleEl = app.querySelector<HTMLDivElement>('#needle')!
   centsEl = app.querySelector<HTMLDivElement>('#cents')!
+  progressEl = app.querySelector<HTMLElement>('#progress')!
   injectStyles()
 }
 
@@ -63,6 +66,18 @@ export function setNote(name: string | null, cents = 0, detail = '') {
   centsEl.textContent =
     name === null ? '' : inTune ? 'in tune' : cents > 0 ? `+${cents}¢ sharp` : `${cents}¢ flat`
   detailEl.textContent = name === null ? 'Play or sing a note' : detail
+}
+
+/** Practice progress shown under the tuner: where you are in the scale, points, streak. */
+export function setProgress(p: { points: number; streak: number; lastPoints: number | null }, step: number, total: number) {
+  if (!progressEl) return
+  const cell = (label: string, value: string) =>
+    `<div class="stat"><div class="stat-value">${value}</div><div class="stat-label">${label}</div></div>`
+  progressEl.innerHTML =
+    cell('Note', `${Math.min(step + 1, total)} / ${total}`) +
+    cell('Points', String(p.points)) +
+    cell('Streak', `${p.streak} day${p.streak === 1 ? '' : 's'}`) +
+    cell('Last run', p.lastPoints === null ? '–' : `+${p.lastPoints}`)
 }
 
 // Temporary mic diagnostics; remove once pitch detection is confirmed working.
@@ -108,6 +123,10 @@ function injectStyles() {
     .needle.hidden { display: none; }
     .cents { margin-top: 12px; min-height: 22px; font-size: 18px; color: #E5E5E5; font-variant-numeric: tabular-nums; }
     .detail { margin-top: 12px; font-size: 14px; color: #919191; font-variant-numeric: tabular-nums; }
+    .progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .stat { background: #2E2E2E; border: 1px solid #3E3E3E; border-radius: 12px; padding: 12px 8px; text-align: center; }
+    .stat-value { font-size: 20px; font-weight: 600; color: #3CFA44; font-variant-numeric: tabular-nums; }
+    .stat-label { margin-top: 4px; font-size: 11px; color: #919191; letter-spacing: 0.04em; text-transform: uppercase; }
     .debug { font: 12px/1.4 ui-monospace, Menlo, monospace; color: #A7A7A7; text-align: center; }
     footer { font-size: 12px; color: #7B7B7B; text-align: center; }
   `
