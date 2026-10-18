@@ -9,6 +9,8 @@ import { detectPitch, rms } from './pitch/detector'
 import { freqToNote } from './pitch/notes'
 import { mountUi, setStatus, setNote, setDebug } from './ui'
 import { BOX_W, BOX_PAD, tunerText, pausedText } from './glasses'
+import { SheetDisplay, sheetBox } from './sheet'
+import { majorScale } from './staff'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
@@ -26,7 +28,7 @@ const bridge = await waitForEvenAppBridge()
 const BOX_H = 3 * 27 + 2 * BOX_PAD
 const noteBox = new TextContainerProperty({
   xPosition: 0,
-  yPosition: Math.round((288 - BOX_H) / 2),
+  yPosition: 288 - BOX_H - 4, // sits under the staff image
   width: BOX_W,
   height: BOX_H,
   borderWidth: 0,
@@ -39,11 +41,34 @@ const noteBox = new TextContainerProperty({
 })
 
 const created = await bridge.createStartUpPageContainer(
-  new CreateStartUpPageContainer({ containerTotalNum: 1, textObject: [noteBox] }),
+  new CreateStartUpPageContainer({ containerTotalNum: 2, textObject: [noteBox], imageObject: [sheetBox] }),
 )
 if (created !== 0) {
   setStatus('error', `createStartUpPageContainer failed: ${created}`)
   console.error('Failed to create startup page')
+}
+
+// ── Sheet music ──────────────────────────────────────────────────────────
+// The exercise: C major scale, one octave, quarter notes. `step` is the note
+// the player should play next.
+const EXERCISE = majorScale(60, 1)
+let step = 0
+let hits = 0 // consecutive analysis frames that matched the expected note
+const HITS_NEEDED = 3
+
+const sheet = new SheetDisplay(bridge)
+sheet.onError = msg => setStatus('error', msg)
+if (created === 0) sheet.show(EXERCISE, { key: 0, current: step, letters: true })
+
+function advanceIfCorrect(midi: number, cents: number) {
+  if (step >= EXERCISE.length) return
+  if (midi === EXERCISE[step].midi && Math.abs(cents) <= 30) hits++
+  else hits = 0
+  if (hits >= HITS_NEEDED) {
+    hits = 0
+    step++
+    sheet.show(EXERCISE, { key: 0, current: Math.min(step, EXERCISE.length - 1), letters: true })
+  }
 }
 
 let lastRender = IDLE_TEXT
@@ -101,6 +126,7 @@ function analyze() {
 
   if (pitch && pitch.clarity >= MIN_CLARITY) {
     const note = freqToNote(pitch.freq)
+    advanceIfCorrect(note.midi, note.cents)
     lastHeard = now
     if (note.name === shownNote || note.name === candidate) {
       // Smooth in cents, and start fresh on a note change so A and A# never
