@@ -22,7 +22,7 @@ import { H, W, renderStaff, type RenderOptions, type StaffNote } from './staff'
  *  'gray8' - one byte per pixel (0-255). Used by Even's newer sample apps.
  * If the glasses show nothing or updateImageRawData reports an error, switch this.
  */
-export const IMAGE_FORMAT: 'png' | 'gray8' = 'png'
+export const IMAGE_FORMAT: 'png' | 'gray8' = 'gray8'
 
 /** Minimum gap between image sends. The SDK sample uses about 1000 ms. */
 const MIN_SEND_INTERVAL_MS = 500

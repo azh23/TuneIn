@@ -24,13 +24,14 @@ The CREAO account key must stay on the bridge, never in Vite or the glasses app.
 Set these variables in the shell that runs the bridge:
 
 ```powershell
-$env:CREAO_API_KEY = "cr_sk_..."
-$env:CREAO_AGENT_ID = "your-agent-id"
+$env:CREAO_API_KEY = "capi_..."
+$env:CREAO_APP_ID = "your-app-id"
 npm run api
 ```
 
 Run `npm run dev` in another shell. Vite proxies `/api/recognize-sheet` to the
-bridge on port 8787. The CREAO agent should be instructed to return JSON shaped
+bridge on port 8787. Create the `capi_...` key from the agent detail page's
+API Trigger section and use the app ID shown there. The CREAO agent should be instructed to return JSON shaped
 like this:
 
 ```json
@@ -44,8 +45,9 @@ like this:
 }
 ```
 
-The bridge polls the asynchronous `POST /v1/runs` result and validates the
-recognized notes before they are drawn. For production, deploy the bridge
+The bridge starts a local recognition job and polls the asynchronous
+`POST /v1/runs` result in the background. The WebView polls the local job
+status and validates the recognized notes before they are drawn. For production, deploy the bridge
 behind HTTPS and set the app's `/api` URL to that deployment.
 
 ## First-run expectation

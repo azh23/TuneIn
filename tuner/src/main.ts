@@ -70,6 +70,7 @@ sheet.onError = msg => setStatus('error', msg)
 
 onPhotoSelected(async file => {
   setPhotoStatus('Recognizing sheet music…')
+  setStatus('paused', 'Recognizing sheet music…')
   try {
     const recognized = await recognizeSheet(file)
     sheet.show(recognized.notes, {
@@ -83,7 +84,7 @@ onPhotoSelected(async file => {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not recognize sheet music'
     setPhotoStatus(message, true)
-    setStatus('error', 'Sheet recognition failed')
+    setStatus('error', `Sheet recognition failed: ${message}`)
   }
 })
 
