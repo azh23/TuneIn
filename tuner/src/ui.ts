@@ -1,4 +1,5 @@
 import { tuningEmoji } from './pitch/notes'
+import { IN_TUNE_CENTS } from './scoring'
 
 type Status = 'connecting' | 'listening' | 'paused' | 'error'
 
@@ -62,7 +63,6 @@ export function setStatus(kind: Status, text: string) {
   statusEl.textContent = text
 }
 
-const IN_TUNE_CENTS = 5
 
 /** Pass null to show the idle state. `cents` is -50..+50 from the note. */
 export function setNote(name: string | null, cents = 0, detail = '') {

@@ -6,7 +6,7 @@
 // (5 px each), measured with @evenrealities/pretext.
 
 import { getTextWidth } from '@evenrealities/pretext'
-import type { Summary } from './scoring'
+import { IN_TUNE_CENTS, type Summary } from './scoring'
 import { tuningEmoji } from './pitch/notes'
 
 export const BOX_W = 576
@@ -16,7 +16,8 @@ const SPACE_W = getTextWidth(' ')
 
 /** Slots on each side of center. Each slot is 50 / SLOTS cents. */
 const SLOTS = 10
-export const IN_TUNE_CENTS = 5
+/** The needle snaps to center this close; "in tune" uses the grader's IN_TUNE_CENTS. */
+const CENTER_CENTS = 5
 
 function center(line: string): string {
   const pad = Math.max(0, Math.round((INNER_W - getTextWidth(line)) / 2 / SPACE_W))
@@ -28,7 +29,7 @@ function scale(cents: number | null): string {
   for (let i = -SLOTS; i <= SLOTS; i++) slots.push(i === 0 ? '┼' : '─')
   if (cents !== null) {
     const pos =
-      Math.abs(cents) <= IN_TUNE_CENTS ? 0 : Math.max(-SLOTS, Math.min(SLOTS, Math.round((cents / 50) * SLOTS)))
+      Math.abs(cents) <= CENTER_CENTS ? 0 : Math.max(-SLOTS, Math.min(SLOTS, Math.round((cents / 50) * SLOTS)))
     slots[pos + SLOTS] = '█'
   }
   return `♭ ${slots.join('')} ♯`
@@ -55,6 +56,12 @@ export function countInText(n: number, beats: number, bpm: number): string {
 
 /** Corner beat indicator: one dot per beat in the bar, current one filled. */
 export const BEAT_BOX_W = 112
+
+/** Top-left corner box: level and best score on the current exercise. */
+export const STATS_BOX_W = 136
+export function statsText(level: number, best: number | undefined): string {
+  return `Lv ${level}\nbest ${best === undefined ? '–' : `${best}%`}`
+}
 export function beatText(n: number | null, beats: number): string {
   if (n === null) return ' ' // a text container can't be empty
   return Array.from({ length: beats }, (_, i) => (i === n - 1 ? '●' : '○')).join(' ')
