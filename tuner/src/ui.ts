@@ -32,7 +32,7 @@ export function mountUi() {
       </section>
       <section id="progress" class="progress" aria-live="polite"></section>
       <div id="debug" class="debug">mic: no audio yet</div>
-      <footer>Tap the glasses temple to pause · double-tap to exit.</footer>
+      <footer>Tap the glasses temple to pause · double-tap to restart (twice to exit).</footer>
     </main>
   `
   statusEl = app.querySelector<HTMLDivElement>('#status')!
