@@ -8,12 +8,17 @@ import {
 import { detectPitch, rms } from './pitch/detector'
 import { freqToNote } from './pitch/notes'
 import { mountUi, setStatus, setNote, setDebug, setProgress, setLastRun, setBeat } from './ui'
-import { BOX_W, BOX_PAD, BEAT_BOX_W, tunerText, countInText, resultsText, beatText } from './glasses'
+import { BOX_W, BOX_PAD, BEAT_BOX_W, tunerText, countInText, resultsText, beatText, bufferText } from './glasses'
 import { SheetDisplay, sheetBox } from './sheet'
-import { RHYTHM_TEST } from './exercises'
 import { Session, applySession, loadProgress, saveProgress, type Summary } from './scoring'
 import { midiName } from './pitch/notes'
 import { CountIn } from './metronome'
+import { byId } from './instruments'
+import { toSounding, type PracticeExercise } from './generator'
+import { ExerciseQueue, bridgeStorage, loadInstrument } from './queue'
+import { buildQueueWithAgent } from './creao'
+import { applyRun, initialLevel, scorePercent, PASS_AT, MAX_TRIES, type LevelState } from './leveling'
+import { PROXY_URL, DEFAULT_INSTRUMENT, BUFFER_MAX_MS } from './config'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
@@ -81,17 +86,58 @@ if (created !== 0) {
   console.error('Failed to create startup page')
 }
 
+// ── Instrument, exercise queue, level ────────────────────────────────────
+const storage = bridgeStorage(bridge)
+// The speech step saves the instrument with saveInstrument(); until then use the default.
+const INSTRUMENT = (await loadInstrument(storage)) ?? byId(DEFAULT_INSTRUMENT) ?? byId('voice')!
+
+const LEVEL_KEY = 'tunein.level.v1'
+async function loadLevel(): Promise<LevelState> {
+  try {
+    const raw = await storage.get(LEVEL_KEY)
+    if (raw) {
+      const v = JSON.parse(raw) as LevelState
+      if (Number.isFinite(v.level)) return { level: v.level, upStreak: v.upStreak | 0, downStreak: v.downStreak | 0 }
+    }
+  } catch {}
+  return initialLevel()
+}
+const saveLevel = () => void storage.set(LEVEL_KEY, JSON.stringify(levelState))
+
+// Buffer screen: stock the queue (and ask the agent) before the first exercise.
+const bufferMs = (ms: number) => {
+  const text = bufferText(Math.round(ms / 1000), Math.round(BUFFER_MAX_MS / 1000))
+  void bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 1, containerName: 'note', content: text }))
+}
+setStatus('paused', 'Getting your music ready…')
+if (created === 0) bufferMs(0)
+let queue: ExerciseQueue
+if (PROXY_URL) {
+  const built = await buildQueueWithAgent(INSTRUMENT, storage, {
+    proxyUrl: PROXY_URL,
+    maxWaitMs: BUFFER_MAX_MS,
+    onBuffering: ms => bufferMs(ms),
+  })
+  queue = built.queue
+} else {
+  queue = (await ExerciseQueue.load(storage, INSTRUMENT.id)) ?? (await ExerciseQueue.create(INSTRUMENT, storage))
+}
+let levelState = await loadLevel()
+
 // ── Sheet music + scoring ────────────────────────────────────────────────
-// The piece to practice. Swap in C_MAJOR_SCALE (or add your own in
-// exercises.ts) to change it.
-const EXERCISE = RHYTHM_TEST
+// The exercise stays the same until a run passes (PASS_AT); see finishSession.
+let EXERCISE: PracticeExercise = queue.next(levelState.level)
+let tries = 0 // misses on this exercise so far
+bpm = EXERCISE.tempoBpm
+// The staff shows written pitch; the mic hears sounding pitch (trumpet, sax…).
 // Match pitch class only while testing with voice (lower voices sing the
 // scale an octave down). Set false to require the written octave.
 const IGNORE_OCTAVE = true
 // ready → (tap) → countIn → playing → results → (tap) → countIn …
 type Phase = 'ready' | 'countIn' | 'playing' | 'results'
 let phase: Phase = 'ready'
-const newSession = () => new Session(EXERCISE.notes, IGNORE_OCTAVE, bpm === null ? undefined : 60000 / bpm)
+let passed = false
+const newSession = () => new Session(toSounding(EXERCISE), IGNORE_OCTAVE, bpm === null ? undefined : 60000 / bpm)
 let session = newSession()
 let resultsContent = ''
 let countInContent = ''
@@ -104,8 +150,8 @@ sheet.onError = msg => setStatus('error', msg)
 function drawSheet() {
   // The marker stays on a note while it's being held (filled) and moves on
   // when the next note starts. marker = notes.length dims every note (done).
-  const { notes, key, timeSig, showTimeSig } = EXERCISE
-  sheet.show(notes, { key, timeSig, showTimeSig, current: session.marker, currentHeld: session.holding, letters: true })
+  const { notes, key, timeSig } = EXERCISE
+  sheet.show(notes, { key, timeSig, showTimeSig: true, current: session.marker, currentHeld: session.holding, letters: true })
   setProgress(progress, session.marker, notes.length)
 }
 if (created === 0) drawSheet()
@@ -117,8 +163,35 @@ function finishSession() {
   void saveProgress(bridge, progress)
   countIn.cancel()
   showBeat(null)
-  resultsContent = resultsText(s)
-  setLastRun(lastRunText(s))
+
+  const runText = lastRunText(s) // before EXERCISE can change
+  const pct = scorePercent(s.points, EXERCISE.notes.length)
+  passed = pct >= PASS_AT
+  const before = levelState.level
+  const run = applyRun(levelState, pct)
+  levelState = run.state
+  let footer = ''
+  if (passed) {
+    tries = 0
+    void queue.markSeen(EXERCISE.id)
+    footer = run.change === 'up' ? `Level up! Now level ${levelState.level}` : `Passed · ${Math.round(pct * 100)}% · tap for next`
+  } else {
+    tries++
+    if (tries >= MAX_TRIES && levelState.level > 1 && run.change !== 'down') {
+      levelState = { level: levelState.level - 1, upStreak: 0, downStreak: 0 }
+      footer = `Let's try something easier`
+    } else if (run.change === 'down') footer = `Back to level ${levelState.level} for now`
+    else footer = `${Math.round(pct * 100)}% · need ${Math.round(PASS_AT * 100)}% · tap to retry (${tries}/${MAX_TRIES})`
+  }
+  saveLevel()
+  // Move on only after a pass, or when the level dropped (nothing easier to retry otherwise).
+  if (passed || levelState.level !== before) {
+    EXERCISE = queue.next(levelState.level)
+    tries = 0
+    bpm = EXERCISE.tempoBpm
+  }
+  resultsContent = resultsText(s, passed ? `Passed!  +${s.points} pts` : `Not yet  +${s.points} pts`, footer)
+  setLastRun(`${runText} · ${Math.round(pct * 100)}% · ${footer} · level ${levelState.level}`)
   setPhase('results')
 }
 
@@ -136,10 +209,10 @@ function lastRunText(s: Summary): string {
 }
 
 const HINTS: Record<Phase, () => string> = {
-  ready: () => `Ready · ${tempoLabel()} · tap to start · swipe to change tempo · double-tap to exit`,
+  ready: () => `Level ${levelState.level} · ready · ${tempoLabel()} · tap to start · swipe to change tempo · double-tap to exit`,
   countIn: () => 'Count-in… · tap to cancel',
   playing: () => 'Playing · tap to stop · double-tap to restart',
-  results: () => `Done · tap to go again (${tempoLabel()}) · swipe to change tempo`,
+  results: () => (passed ? `Passed · tap for the next exercise · ${tempoLabel()}` : `Not yet · tap to retry · ${tempoLabel()}`),
 }
 
 function setPhase(p: Phase) {
@@ -331,6 +404,8 @@ function analyze() {
 // ready, and only the playing phase feeds the grader.
 await bridge.audioControl(true)
 setPhase('ready')
+lastRender = '' // the glasses may still show the buffer screen
+updateGlassesText(true)
 
 let cleanedUp = false
 function cleanup() {
