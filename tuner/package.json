@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "api": "node server.mjs",
     "pack": "npm run build && evenhub pack app.json dist",
     "simulate": "node node_modules/@evenrealities/evenhub-simulator/bin/index.js http://localhost:5173"
   },

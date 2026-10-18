@@ -7,6 +7,9 @@ let debugEl: HTMLDivElement
 let needleEl: HTMLDivElement
 let centsEl: HTMLDivElement
 let progressEl: HTMLElement
+let photoInput: HTMLInputElement
+let photoStatus: HTMLDivElement
+let photoHandler: ((file: File) => Promise<void>) | null = null
 
 export function mountUi() {
   const app = document.querySelector<HTMLDivElement>('#app')!
@@ -31,6 +34,12 @@ export function mountUi() {
         <div id="detail" class="detail">Play or sing a note</div>
       </section>
       <section id="progress" class="progress" aria-live="polite"></section>
+      <section class="photo-tools">
+        <label class="photo-button">Add sheet music photo
+          <input id="photo-input" type="file" accept="image/*" capture="environment">
+        </label>
+        <div id="photo-status" class="photo-status" aria-live="polite">Upload or photograph sheet music to show it on the glasses.</div>
+      </section>
       <div id="debug" class="debug">mic: no audio yet</div>
       <footer>Tap the glasses temple to pause · double-tap to restart (twice to exit).</footer>
     </main>
@@ -42,7 +51,24 @@ export function mountUi() {
   needleEl = app.querySelector<HTMLDivElement>('#needle')!
   centsEl = app.querySelector<HTMLDivElement>('#cents')!
   progressEl = app.querySelector<HTMLElement>('#progress')!
+  photoInput = app.querySelector<HTMLInputElement>('#photo-input')!
+  photoStatus = app.querySelector<HTMLDivElement>('#photo-status')!
+  photoInput.addEventListener('change', () => {
+    const file = photoInput.files?.[0]
+    if (file && photoHandler) void photoHandler(file)
+    photoInput.value = ''
+  })
   injectStyles()
+}
+
+export function onPhotoSelected(handler: (file: File) => Promise<void>) {
+  photoHandler = handler
+}
+
+export function setPhotoStatus(text: string, error = false) {
+  if (!photoStatus) return
+  photoStatus.textContent = text
+  photoStatus.classList.toggle('photo-error', error)
 }
 
 export function setStatus(kind: Status, text: string) {
@@ -128,6 +154,11 @@ function injectStyles() {
     .stat-value { font-size: 20px; font-weight: 600; color: #3CFA44; font-variant-numeric: tabular-nums; }
     .stat-label { margin-top: 4px; font-size: 11px; color: #919191; letter-spacing: 0.04em; text-transform: uppercase; }
     .debug { font: 12px/1.4 ui-monospace, Menlo, monospace; color: #A7A7A7; text-align: center; }
+    .photo-tools { background: #2E2E2E; border: 1px solid #3E3E3E; border-radius: 12px; padding: 12px; }
+    .photo-button { display: block; border: 1px solid #3CFA44; border-radius: 8px; color: #3CFA44; padding: 10px; text-align: center; cursor: pointer; }
+    .photo-button input { display: none; }
+    .photo-status { margin-top: 8px; color: #919191; font-size: 12px; text-align: center; }
+    .photo-status.photo-error { color: #FF453A; }
     footer { font-size: 12px; color: #7B7B7B; text-align: center; }
   `
   const style = document.createElement('style')

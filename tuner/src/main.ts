@@ -7,11 +7,12 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import { detectPitch, rms } from './pitch/detector'
 import { freqToNote } from './pitch/notes'
-import { mountUi, setStatus, setNote, setDebug, setProgress } from './ui'
+import { mountUi, setStatus, setNote, setDebug, setProgress, onPhotoSelected, setPhotoStatus } from './ui'
 import { BOX_W, BOX_PAD, tunerText, pausedText, resultsText } from './glasses'
 import { SheetDisplay, sheetBox } from './sheet'
 import { majorScale } from './staff'
 import { Session, applySession, loadProgress, saveProgress } from './scoring'
+import { recognizeSheet } from './sheetRecognition'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
@@ -66,6 +67,25 @@ let progress = await loadProgress(bridge)
 
 const sheet = new SheetDisplay(bridge)
 sheet.onError = msg => setStatus('error', msg)
+
+onPhotoSelected(async file => {
+  setPhotoStatus('Recognizing sheet music…')
+  try {
+    const recognized = await recognizeSheet(file)
+    sheet.show(recognized.notes, {
+      key: recognized.key,
+      timeSig: recognized.timeSig,
+      showTimeSig: true,
+      letters: true,
+    })
+    setPhotoStatus(`${recognized.title ?? 'Sheet music'} loaded: ${recognized.notes.length} notes`)
+    setStatus('listening', 'Sheet music loaded')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not recognize sheet music'
+    setPhotoStatus(message, true)
+    setStatus('error', 'Sheet recognition failed')
+  }
+})
 
 function drawSheet() {
   // current = EXERCISE.length draws every note dim (run finished, nothing to play next)

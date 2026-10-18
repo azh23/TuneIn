@@ -14,6 +14,40 @@ npm run dev
 
 Then `npm run simulate` (desktop simulator) or `npx evenhub qr --url http://<your-ip>:5173` to test on real glasses.
 
+## Sheet music photos with CREAO
+
+The companion WebView includes an **Add sheet music photo** control. It accepts a
+photo from the phone library or opens the camera, sends it to the local CREAO
+bridge, and renders the returned notes on the G2.
+
+The CREAO account key must stay on the bridge, never in Vite or the glasses app.
+Set these variables in the shell that runs the bridge:
+
+```powershell
+$env:CREAO_API_KEY = "cr_sk_..."
+$env:CREAO_AGENT_ID = "your-agent-id"
+npm run api
+```
+
+Run `npm run dev` in another shell. Vite proxies `/api/recognize-sheet` to the
+bridge on port 8787. The CREAO agent should be instructed to return JSON shaped
+like this:
+
+```json
+{
+  "title": "Exercise 1",
+  "key": 0,
+  "timeSignature": [4, 4],
+  "measures": [
+    { "notes": [{ "pitch": "C4", "duration": "quarter" }] }
+  ]
+}
+```
+
+The bridge polls the asynchronous `POST /v1/runs` result and validates the
+recognized notes before they are drawn. For production, deploy the bridge
+behind HTTPS and set the app's `/api` URL to that deployment.
+
 ## First-run expectation
 
 Until you implement `src/asr/stt.ts`, the companion WebView shows a red error chip: *"STT provider not implemented — open src/asr/stt.ts and wire up your chosen STT service."* That's by design — the scaffold compiles and runs, but the STT handoff throws on startup so you know exactly where to go.
