@@ -7,10 +7,11 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import { detectPitch, rms } from './pitch/detector'
 import { freqToNote } from './pitch/notes'
-import { mountUi, setStatus, setNote, setDebug } from './ui'
-import { BOX_W, BOX_PAD, tunerText, pausedText } from './glasses'
+import { mountUi, setStatus, setNote, setDebug, setProgress } from './ui'
+import { BOX_W, BOX_PAD, tunerText, pausedText, resultsText } from './glasses'
 import { SheetDisplay, sheetBox } from './sheet'
 import { majorScale } from './staff'
+import { Session, applySession, loadProgress, saveProgress } from './scoring'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
@@ -52,26 +53,46 @@ if (created !== 0) {
   console.error('Failed to create startup page')
 }
 
-// ── Sheet music ──────────────────────────────────────────────────────────
-// The exercise: C major scale, one octave, quarter notes. `step` is the note
-// the player should play next.
+// ── Sheet music + scoring ────────────────────────────────────────────────
+// The exercise: C major scale, one octave, quarter notes.
 const EXERCISE = majorScale(60, 1)
-let step = 0
-let hits = 0 // consecutive analysis frames that matched the expected note
-const HITS_NEEDED = 3
+let session = new Session(EXERCISE)
+let showingResults = false
+let resultsContent = ''
+let progress = await loadProgress(bridge)
 
 const sheet = new SheetDisplay(bridge)
 sheet.onError = msg => setStatus('error', msg)
-if (created === 0) sheet.show(EXERCISE, { key: 0, current: step, letters: true })
 
-function advanceIfCorrect(midi: number, cents: number) {
-  if (step >= EXERCISE.length) return
-  if (midi === EXERCISE[step].midi && Math.abs(cents) <= 30) hits++
-  else hits = 0
-  if (hits >= HITS_NEEDED) {
-    hits = 0
-    step++
-    sheet.show(EXERCISE, { key: 0, current: Math.min(step, EXERCISE.length - 1), letters: true })
+function drawSheet() {
+  // current = EXERCISE.length draws every note dim (run finished, nothing to play next)
+  sheet.show(EXERCISE, { key: 0, current: session.done ? EXERCISE.length : session.step, letters: true })
+  setProgress(progress, session.step, EXERCISE.length)
+}
+if (created === 0) drawSheet()
+else setProgress(progress, session.step, EXERCISE.length)
+
+function finishSession() {
+  const s = session.summary()
+  progress = applySession(progress, s)
+  void saveProgress(bridge, progress)
+  resultsContent = resultsText(s.avgCents, s.wrongNotes, s.points)
+  showingResults = true
+}
+
+function restartSession() {
+  session = new Session(EXERCISE)
+  showingResults = false
+  currentContent = IDLE_TEXT
+  drawSheet()
+  scheduleGlassesRender()
+}
+
+function onPitch(midi: number, cents: number, now: number) {
+  if (showingResults) return
+  if (session.feed(midi, cents, now)) {
+    if (session.done) finishSession()
+    drawSheet()
   }
 }
 
@@ -135,9 +156,10 @@ function analyze() {
       ` · clarity ${raw ? raw.clarity.toFixed(2) : '–'} (need ≥ ${minClarity})`,
   )
 
+  if (!pitch && !showingResults) session.silence(now)
   if (pitch) {
     const note = freqToNote(pitch.freq)
-    advanceIfCorrect(note.midi, note.cents)
+    onPitch(note.midi, note.cents, now)
     lastHeard = now
     if (note.name === shownNote || note.name === candidate) {
       // Smooth in cents, and start fresh on a note change so A and A# never
@@ -157,7 +179,9 @@ function analyze() {
     setNote(null)
   }
 
-  currentContent = tunerText(shownNote, smoothCents === null ? null : Math.round(smoothCents))
+  currentContent = showingResults
+    ? resultsContent
+    : tunerText(shownNote, smoothCents === null ? null : Math.round(smoothCents))
   scheduleGlassesRender()
 }
 
@@ -228,7 +252,8 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   }
 
   if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
-    toggleMic()
+    if (showingResults) restartSession() // tap on the results screen = play again
+    else toggleMic()
     return
   }
 
