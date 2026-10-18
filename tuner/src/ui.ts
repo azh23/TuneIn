@@ -7,6 +7,8 @@ let debugEl: HTMLDivElement
 let needleEl: HTMLDivElement
 let centsEl: HTMLDivElement
 let progressEl: HTMLElement
+let lastRunEl: HTMLElement
+let beatEl: HTMLElement
 
 export function mountUi() {
   const app = document.querySelector<HTMLDivElement>('#app')!
@@ -17,6 +19,7 @@ export function mountUi() {
         <div id="status" class="status status-connecting">Connecting…</div>
       </header>
       <section class="readout" aria-live="polite">
+        <div id="beat" class="beat"></div>
         <div id="note" class="note idle">–</div>
         <div class="meter">
           <span class="flat">♭</span>
@@ -31,8 +34,9 @@ export function mountUi() {
         <div id="detail" class="detail">Play or sing a note</div>
       </section>
       <section id="progress" class="progress" aria-live="polite"></section>
+      <div id="last-run" class="last-run hidden"></div>
       <div id="debug" class="debug">mic: no audio yet</div>
-      <footer>Tap the glasses temple to pause · double-tap to restart (twice to exit).</footer>
+      <footer>Tap the temple to start (1-2-3-4 count-in) or stop · swipe to change tempo (below 40 = free tempo, no metronome) · double-tap to restart (twice to exit).</footer>
     </main>
   `
   statusEl = app.querySelector<HTMLDivElement>('#status')!
@@ -42,6 +46,8 @@ export function mountUi() {
   needleEl = app.querySelector<HTMLDivElement>('#needle')!
   centsEl = app.querySelector<HTMLDivElement>('#cents')!
   progressEl = app.querySelector<HTMLElement>('#progress')!
+  lastRunEl = app.querySelector<HTMLElement>('#last-run')!
+  beatEl = app.querySelector<HTMLElement>('#beat')!
   injectStyles()
 }
 
@@ -80,6 +86,20 @@ export function setProgress(p: { points: number; streak: number; lastPoints: num
     cell('Last run', p.lastPoints === null ? '–' : `+${p.lastPoints}`)
 }
 
+/** Beat dots in the corner of the readout while playing; null clears them. */
+export function setBeat(n: number | null, beats: number) {
+  if (!beatEl) return
+  beatEl.innerHTML =
+    n === null ? '' : Array.from({ length: beats }, (_, i) => `<span class="${i === n - 1 ? 'on' : ''}"></span>`).join('')
+}
+
+/** One-line breakdown of the run just finished; null hides it. */
+export function setLastRun(text: string | null) {
+  if (!lastRunEl) return
+  lastRunEl.textContent = text ?? ''
+  lastRunEl.classList.toggle('hidden', text === null)
+}
+
 // Temporary mic diagnostics; remove once pitch detection is confirmed working.
 export function setDebug(text: string) {
   if (debugEl) debugEl.textContent = text
@@ -105,7 +125,10 @@ function injectStyles() {
     .status-listening  { color: #3CFA44; border-color: #3CFA44; background: rgba(60,250,68,0.08); }
     .status-paused     { color: #E5E5E5; border-color: #7B7B7B; background: rgba(229,229,229,0.06); }
     .status-error      { color: #FF453A; border-color: #FF453A; background: rgba(255,69,58,0.08); }
-    .readout { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    .beat { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; }
+    .beat span { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid #5A5A5A; }
+    .beat span.on { background: #3CFA44; border-color: #3CFA44; }
+    .readout { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
       background: #2E2E2E; border: 1px solid #3E3E3E; border-radius: 12px; padding: 20px;
       min-height: 220px; }
     .note { font-size: 120px; font-weight: 600; line-height: 1; color: #E5E5E5;
@@ -123,6 +146,8 @@ function injectStyles() {
     .needle.hidden { display: none; }
     .cents { margin-top: 12px; min-height: 22px; font-size: 18px; color: #E5E5E5; font-variant-numeric: tabular-nums; }
     .detail { margin-top: 12px; font-size: 14px; color: #919191; font-variant-numeric: tabular-nums; }
+    .last-run { font-size: 13px; color: #E5E5E5; text-align: center; font-variant-numeric: tabular-nums; }
+    .last-run.hidden { display: none; }
     .progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
     .stat { background: #2E2E2E; border: 1px solid #3E3E3E; border-radius: 12px; padding: 12px 8px; text-align: center; }
     .stat-value { font-size: 20px; font-weight: 600; color: #3CFA44; font-variant-numeric: tabular-nums; }

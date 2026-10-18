@@ -3,6 +3,7 @@
 
 import type { EvenAppBridge } from '@evenrealities/even_hub_sdk'
 import type { StaffNote } from './staff'
+import { gradeRhythm, msPerBeat, type RhythmSummary } from './rhythm'
 
 /** Consecutive good readings needed before a note counts as played. */
 export const HITS_NEEDED = 3
@@ -15,10 +16,13 @@ const RELEASE_MS = 250
 
 export interface NoteResult {
   midi: number
-  /** Median error in cents (negative = flat, positive = sharp). */
+  /** Median error in cents over the whole time the note was held
+   *  (negative = flat, positive = sharp). */
   centsError: number
   /** Milliseconds since the previous note (kept for beat scoring later). */
   gapMs: number
+  /** When the right note started sounding (same clock as `feed`'s `now`). */
+  onsetMs: number
   /** Wrong notes heard while trying to play this one. */
   wrongNotes: number
 }
@@ -27,9 +31,14 @@ export interface Summary {
   total: number
   avgCents: number // average absolute error
   wrongNotes: number
+  /** Total = pitchPoints + rhythmPoints (+ perfect bonus). */
   points: number
+  pitchPoints: number
+  rhythmPoints: number
   perfect: boolean
   durationMs: number
+  /** Null until at least 3 notes are played (needs 2+ intervals). */
+  rhythm: RhythmSummary | null
 }
 
 function median(xs: number[]): number {
@@ -43,6 +52,11 @@ function notePoints(absCents: number, wrongNotes: number): number {
   return Math.max(0, base - 3 * wrongNotes)
 }
 
+/** Up to this many points per note for timing (all notes but the last are graded). */
+const RHYTHM_POINTS_PER_NOTE = 5
+/** Rhythm score needed (when there is one) for the perfect bonus. */
+const PERFECT_RHYTHM = 85
+
 export class Session {
   step = 0
   results: NoteResult[] = []
@@ -54,15 +68,33 @@ export class Session {
   private endedAt: number | null = null
   private heldMidi: number | null = null // note just completed and probably still ringing
   private silentSince: number | null = null
+  private targetSince: number | null = null // onset of the current attempt at the target note
+  private finished = false
+  private samples: number[][] = [] // every cents reading per completed note, incl. while held
 
   constructor(
     readonly exercise: StaffNote[],
     /** Match pitch class only, so playing/singing an octave off still counts. */
     private readonly ignoreOctave = false,
+    /** Metronome tempo; rhythm is graded against it when set. */
+    private readonly fixedMsPerBeat?: number,
   ) {}
 
+  /** True once the last note has been played AND let go (or held long enough). */
   get done(): boolean {
-    return this.step >= this.exercise.length
+    return this.finished
+  }
+
+  /** True while the note just completed is still sounding. The display keeps
+   *  pointing at it until the player moves on, instead of jumping ahead. */
+  get holding(): boolean {
+    return this.heldMidi !== null && !this.finished
+  }
+
+  /** Index of the note the display should point at. */
+  get marker(): number {
+    if (this.finished) return this.exercise.length
+    return this.holding ? this.step - 1 : this.step
   }
 
   /** True once anything has been played, so a restart would lose progress. */
@@ -74,54 +106,101 @@ export class Session {
     return this.ignoreOctave ? (((a - b) % 12) + 12) % 12 === 0 : a === b
   }
 
-  /** Call on every reading where no clear pitch was heard. */
-  silence(now: number) {
-    if (this.silentSince === null) this.silentSince = now
-    else if (now - this.silentSince >= RELEASE_MS) this.heldMidi = null
+  private finish(now: number) {
+    this.finished = true
+    this.heldMidi = null
+    this.endedAt = now
   }
 
-  /** Feed one pitch reading. Returns true when the current note was just completed. */
+  /** True once the final note has sounded for its written length at the
+   *  tempo the player has been using. */
+  private lastNoteLongEnough(now: number): boolean {
+    const beats = this.exercise.map(n => n.beats)
+    const tempo = this.fixedMsPerBeat ?? msPerBeat(this.results.map(r => r.onsetMs), beats)
+    const last = this.results[this.results.length - 1]
+    return tempo !== null && last !== undefined && now - last.onsetMs >= beats[beats.length - 1] * tempo
+  }
+
+  /** Call on every reading where no clear pitch was heard. Returns true when
+   *  the display should update (a held note was let go). */
+  silence(now: number): boolean {
+    if (this.finished) return false
+    if (this.silentSince === null) {
+      this.silentSince = now
+      return false
+    }
+    if (now - this.silentSince < RELEASE_MS || this.heldMidi === null) return false
+    this.heldMidi = null
+    if (this.step >= this.exercise.length) this.finish(this.silentSince)
+    return true
+  }
+
+  /** Feed one pitch reading. Returns true when the display should update:
+   *  a note was completed, a held note gave way to the next one, or the run
+   *  finished. */
   feed(midi: number, cents: number, now: number): boolean {
-    if (this.done) return false
+    if (this.finished) return false
     this.silentSince = null
 
     // The note we just finished is usually still ringing: it is neither right nor wrong.
+    let changed = false
     if (this.heldMidi !== null) {
-      if (this.same(midi, this.heldMidi)) return false
+      if (this.same(midi, this.heldMidi)) {
+        // Still holding the completed note: keep judging its intonation.
+        const i = this.results.length - 1
+        this.samples[i].push(cents)
+        this.results[i].centsError = Math.round(median(this.samples[i]))
+        // Last note: finish once it has been held for its written length.
+        if (this.step >= this.exercise.length && this.lastNoteLongEnough(now)) {
+          this.finish(now)
+          return true
+        }
+        return false
+      }
+      // A different pitch: the player has moved on.
       this.heldMidi = null
+      changed = true
+      if (this.step >= this.exercise.length) {
+        this.finish(now)
+        return true
+      }
     }
     // Brief settling time right after a completed note.
     const target = this.exercise[this.step].midi
-    if (this.lastAt !== null && now - this.lastAt < GRACE_MS && !this.same(midi, target)) return false
+    if (this.lastAt !== null && now - this.lastAt < GRACE_MS && !this.same(midi, target)) return changed
 
     if (this.startedAt === null) this.startedAt = now
 
     if (this.same(midi, target)) {
+      if (this.targetSince === null) this.targetSince = now
       this.wrongRun = 0
       if (Math.abs(cents) <= MATCH_CENTS) this.good.push(cents)
       else this.good = [] // right note but too far out: start the streak again
     } else {
       this.good = []
+      this.targetSince = null
       this.wrongRun++
       // Count a wrong note once it lasts two readings, so one noisy frame is ignored.
       if (this.wrongRun === 2) this.wrongNow++
-      return false
+      return changed
     }
 
-    if (this.good.length < HITS_NEEDED) return false
+    if (this.good.length < HITS_NEEDED) return changed
 
+    this.samples.push([...this.good])
     this.results.push({
       midi: target,
       centsError: Math.round(median(this.good)),
       gapMs: this.lastAt === null ? 0 : Math.round(now - this.lastAt),
+      onsetMs: this.targetSince ?? now,
       wrongNotes: this.wrongNow,
     })
+    this.targetSince = null
     this.lastAt = now
     this.heldMidi = midi
     this.good = []
     this.wrongNow = 0
     this.step++
-    if (this.done) this.endedAt = now
     return true
   }
 
@@ -129,11 +208,18 @@ export class Session {
     const total = this.results.length
     const avgCents = total ? Math.round(this.results.reduce((a, r) => a + Math.abs(r.centsError), 0) / total) : 0
     const wrongNotes = this.results.reduce((a, r) => a + r.wrongNotes, 0)
-    let points = this.results.reduce((a, r) => a + notePoints(Math.abs(r.centsError), r.wrongNotes), 0)
-    const perfect = total === this.exercise.length && wrongNotes === 0 && avgCents <= 15
-    if (perfect) points += 20
+    const pitchPoints = this.results.reduce((a, r) => a + notePoints(Math.abs(r.centsError), r.wrongNotes), 0)
+    const rhythm = gradeRhythm(
+      this.results.map(r => r.onsetMs),
+      this.exercise.slice(0, total).map(n => n.beats),
+      this.fixedMsPerBeat,
+    )
+    const rhythmPoints = rhythm ? Math.round(rhythm.notes.reduce((a, n) => a + n.credit * RHYTHM_POINTS_PER_NOTE, 0)) : 0
+    const perfect =
+      total === this.exercise.length && wrongNotes === 0 && avgCents <= 15 && (!rhythm || rhythm.score >= PERFECT_RHYTHM)
+    const points = pitchPoints + rhythmPoints + (perfect ? 20 : 0)
     const durationMs = this.startedAt !== null && this.endedAt !== null ? Math.round(this.endedAt - this.startedAt) : 0
-    return { total, avgCents, wrongNotes, points, perfect, durationMs }
+    return { total, avgCents, wrongNotes, points, pitchPoints, rhythmPoints, perfect, durationMs, rhythm }
   }
 }
 

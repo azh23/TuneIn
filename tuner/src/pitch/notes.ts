@@ -19,3 +19,8 @@ export function freqToNote(freq: number, a4 = 440): Note {
     midi,
   }
 }
+
+/** "C4", "F#5", … */
+export function midiName(midi: number): string {
+  return `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`
+}
