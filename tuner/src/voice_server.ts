@@ -9,6 +9,9 @@ let latest: {
   conversationId: string;
 } | null = null;
 
+// One turn of the call transcript (only the fields we use).
+type Turn = { role?: string; message?: string | null };
+
 const webhookSecret = process.env.ELEVENLABS_WEBHOOK_SECRET;
 
 if (!webhookSecret) {
@@ -25,8 +28,12 @@ const app = express();
 // Answers the preflight OPTIONS request that custom headers trigger.
 app.use("/api", (req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "ngrok-skip-browser-warning");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, ngrok-skip-browser-warning");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, ngrok-skip-browser-warning"
+  );
+  res.setHeader("Access-Control-Max-Age", "86400");
   if (req.method === "OPTIONS") {
     res.sendStatus(204);
     return;
@@ -48,7 +55,7 @@ app.post(
     }
 
     try {
-      const event = await elevenlabs.webhooks.constructEvent(
+      const event: any = await elevenlabs.webhooks.constructEvent(
         req.body.toString("utf8"),
         signature,
         webhookSecret
@@ -56,7 +63,7 @@ app.post(
 
       if (event.type === "post_call_transcription") {
         const { conversation_id, analysis } = event.data;
-        const turns = event.data.transcript ?? [];
+        const turns: Turn[] = event.data.transcript ?? [];
 
         // ElevenLabs' extracted value (identifier is case-insensitive here).
         const results = (analysis?.data_collection_results ?? {}) as Record<string, any>;
@@ -67,8 +74,8 @@ app.post(
 
         // Everything the caller said, as a fallback for parseInstrument().
         const userText = turns
-          .filter((t) => t.role === "user" && t.message)
-          .map((t) => t.message)
+          .filter((t: Turn) => t.role === "user" && t.message)
+          .map((t: Turn) => t.message as string)
           .join(" ");
 
         latest = { instrument, userText, conversationId: conversation_id };
@@ -99,6 +106,7 @@ app.get("/api/latest-instrument", (_req, res) => {
 
 app.post(
   "/api/transcribe",
+  // Raise the limit if you send raw PCM/WAV for more than a few seconds.
   express.raw({ type: "audio/*", limit: "5mb" }),
   async (req, res) => {
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
@@ -110,8 +118,11 @@ app.post(
       return;
     }
     try {
+      // Use whatever audio type the client actually sent.
+      const contentType = req.header("content-type") ?? "audio/wav";
       const result = await elevenlabs.speechToText.convert({
-        file: new Blob([req.body], { type: "audio/wav" }),
+        // Copy into a plain Uint8Array so newer TS typings accept it.
+        file: new Blob([new Uint8Array(req.body)], { type: contentType }),
         modelId: "scribe_v1",
       });
       const text = (result as any).text ?? "";
@@ -123,7 +134,6 @@ app.post(
     }
   }
 );
-
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () => {

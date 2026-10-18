@@ -13,13 +13,11 @@
     },
     {
       "name": "network",
-      "desc": "Fetch practice exercises",
-      "whitelist": ["https://agent.creao.ai"]
-    },
-    {
-      "name": "ngrok",
-      "desc": "static ngrok tunnel for photon/elevenlabs",
-      "whitelist": ["https://pucker-shucking-suffrage.ngrok-free.dev"]
+      "desc": "Fetch practice exercises and reach the ngrok tunnel for Photon/ElevenLabs.",
+      "whitelist": [
+        "https://agent.creao.ai",
+        "https://pucker-shucking-suffrage.ngrok-free.dev"
+      ]
     }
   ],
   "supported_languages": ["en"]

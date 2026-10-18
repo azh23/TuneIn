@@ -3,7 +3,7 @@
 // toSounding(), because the mic hears sounding pitch (trumpet/clarinet/sax/guitar differ).
 
 import type { StaffNote } from './staff'
-import { type Instrument, writtenRange, MIC_MIN, MIC_MAX, STAFF_MIN, STAFF_MAX, CLEF_STAFF, type Clef } from './instruments'
+import { type Instrument, writtenRange, MIC_MIN, MIC_MAX, CLEF_STAFF, type Clef } from './instruments'
 
 export interface PracticeExercise {
   id: string
@@ -171,7 +171,7 @@ function buildOne(inst: Instrument, level: number, rng: Rng): PracticeExercise |
     tempoBpm: eighths && r.kind !== 'rhythm' ? 54 : 60 + 2 * level,
     notes,
     transpose: inst.transpose,
-    clef: inst.clef, 
+    clef: inst.clef,
   }
 }
 
