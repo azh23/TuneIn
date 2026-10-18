@@ -62,12 +62,19 @@ export function pausedText(): string {
   return [center('Paused'), center(scale(null)), center('Tap to resume')].join('\n')
 }
 
-/** Shown on the glasses when a run is finished. Three short lines. */
-export function resultsText(s: Summary): string {
+/** "Getting your music ready" screen while the agent works. */
+export function bufferText(seconds: number, maxSeconds: number): string {
+  const dots = '.'.repeat(1 + (seconds % 3))
+  return [center('Getting your music ready' + dots), center(scale(null)), center(`${Math.min(seconds, maxSeconds)} s`)].join('\n')
+}
+
+/** Shown on the glasses when a run is finished. Three short lines.
+ *  `headline` and `footer` override the first and last line (pass/level info). */
+export function resultsText(s: Summary, headline?: string, footer?: string): string {
   const rhythm = s.rhythm ? `rhythm ${s.rhythm.score}%  ·  ~${s.rhythm.bpm} bpm` : 'tap to retry'
   return [
-    center(`Done!  +${s.points} pts`),
-    center(`avg ${s.avgCents}¢ off  ·  ${s.wrongNotes} wrong`),
-    center(rhythm),
+    center(headline ?? `Done!  +${s.points} pts`),
+    center(`avg ${s.avgCents}¢ off  ·  ${s.wrongNotes} wrong  ·  ${rhythm.split('  ·')[0]}`),
+    center(footer ?? rhythm),
   ].join('\n')
 }
