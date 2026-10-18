@@ -55,10 +55,23 @@ export class Session {
   private heldMidi: number | null = null // note just completed and probably still ringing
   private silentSince: number | null = null
 
-  constructor(readonly exercise: StaffNote[]) {}
+  constructor(
+    readonly exercise: StaffNote[],
+    /** Match pitch class only, so playing/singing an octave off still counts. */
+    private readonly ignoreOctave = false,
+  ) {}
 
   get done(): boolean {
     return this.step >= this.exercise.length
+  }
+
+  /** True once anything has been played, so a restart would lose progress. */
+  get started(): boolean {
+    return this.startedAt !== null
+  }
+
+  private same(a: number, b: number): boolean {
+    return this.ignoreOctave ? (((a - b) % 12) + 12) % 12 === 0 : a === b
   }
 
   /** Call on every reading where no clear pitch was heard. */
@@ -74,15 +87,16 @@ export class Session {
 
     // The note we just finished is usually still ringing: it is neither right nor wrong.
     if (this.heldMidi !== null) {
-      if (midi === this.heldMidi) return false
+      if (this.same(midi, this.heldMidi)) return false
       this.heldMidi = null
     }
     // Brief settling time right after a completed note.
-    if (this.lastAt !== null && now - this.lastAt < GRACE_MS && midi !== this.exercise[this.step].midi) return false
+    const target = this.exercise[this.step].midi
+    if (this.lastAt !== null && now - this.lastAt < GRACE_MS && !this.same(midi, target)) return false
 
     if (this.startedAt === null) this.startedAt = now
 
-    if (midi === this.exercise[this.step].midi) {
+    if (this.same(midi, target)) {
       this.wrongRun = 0
       if (Math.abs(cents) <= MATCH_CENTS) this.good.push(cents)
       else this.good = [] // right note but too far out: start the streak again
@@ -97,7 +111,7 @@ export class Session {
     if (this.good.length < HITS_NEEDED) return false
 
     this.results.push({
-      midi,
+      midi: target,
       centsError: Math.round(median(this.good)),
       gapMs: this.lastAt === null ? 0 : Math.round(now - this.lastAt),
       wrongNotes: this.wrongNow,

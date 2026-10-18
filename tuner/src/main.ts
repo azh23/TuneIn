@@ -56,7 +56,10 @@ if (created !== 0) {
 // ── Sheet music + scoring ────────────────────────────────────────────────
 // The exercise: C major scale, one octave, quarter notes.
 const EXERCISE = majorScale(60, 1)
-let session = new Session(EXERCISE)
+// Match pitch class only while testing with voice (lower voices sing the
+// scale an octave down). Set false to require the written octave.
+const IGNORE_OCTAVE = true
+let session = new Session(EXERCISE, IGNORE_OCTAVE)
 let showingResults = false
 let resultsContent = ''
 let progress = await loadProgress(bridge)
@@ -81,9 +84,9 @@ function finishSession() {
 }
 
 function restartSession() {
-  session = new Session(EXERCISE)
+  session = new Session(EXERCISE, IGNORE_OCTAVE)
   showingResults = false
-  currentContent = IDLE_TEXT
+  currentContent = micOn ? IDLE_TEXT : pausedText()
   drawSheet()
   scheduleGlassesRender()
 }
@@ -187,7 +190,9 @@ function analyze() {
 
 await bridge.audioControl(true)
 let micOn = true
-setStatus('listening', 'Listening · tap to pause · double-tap to exit')
+const LISTENING_HINT = 'Listening · tap to pause · double-tap to restart'
+const PAUSED_HINT = 'Paused · tap to resume · double-tap to restart'
+setStatus('listening', LISTENING_HINT)
 
 // Tap toggles capture. `audioControl(false)` stops the host pushing PCM.
 function toggleMic() {
@@ -201,10 +206,7 @@ function toggleMic() {
   }
   currentContent = micOn ? IDLE_TEXT : pausedText()
   scheduleGlassesRender()
-  setStatus(
-    micOn ? 'listening' : 'paused',
-    micOn ? 'Listening · tap to pause · double-tap to exit' : 'Paused · tap to resume · double-tap to exit',
-  )
+  setStatus(micOn ? 'listening' : 'paused', micOn ? LISTENING_HINT : PAUSED_HINT)
 }
 
 let cleanedUp = false
@@ -231,9 +233,10 @@ function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeLis
 // Event routing, critical details:
 //   • Taps/double-taps/lifecycle come through `event.sysEvent`.
 //     Audio PCM frames come through `event.audioEvent` — separate branch.
-//   • Double-tap → `shutDownPageContainer(1)` is a root-level check: it
-//     must fire no matter which envelope the event arrives in, so users
-//     can always exit the app. System exit confirmation dialog appears;
+//   • Double-tap restarts the run. On a fresh run it calls
+//     `shutDownPageContainer(1)` instead, so double-tapping twice always
+//     exits. It's a root-level check: it must fire no matter which envelope
+//     the event arrives in. System exit confirmation dialog appears;
 //     SYSTEM_EXIT_EVENT fires on confirm and we clean up there.
 //   • Check DOUBLE_CLICK_EVENT before CLICK_EVENT.
 const unsubscribe = bridge.onEvenHubEvent(event => {
@@ -247,7 +250,9 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   const textType = eventTypeOf(event.textEvent)
 
   if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
-    bridge.shutDownPageContainer(1)
+    // Restart the run; on a fresh run there's nothing to restart, so exit.
+    if (session.started || showingResults) restartSession()
+    else bridge.shutDownPageContainer(1)
     return
   }
 
