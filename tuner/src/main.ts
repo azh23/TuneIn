@@ -16,10 +16,11 @@ import { CountIn } from './metronome'
 import { LatestWriter } from './writer'
 import { byId } from './instruments'
 import { toSounding, MAX_LEVEL, type PracticeExercise } from './generator'
-import { ExerciseQueue, bridgeStorage, loadInstrument } from './queue'
+import { ExerciseQueue, bridgeStorage, loadInstrument, saveInstrument } from './queue'
 import { buildQueueWithAgent, agentInfo } from './creao'
 import { applyRun, initialLevel, scorePercent, PASS_AT, MAX_TRIES, type LevelState } from './leveling'
 import { PROXY_URL, CREAO_KEY, CREAO_APP_ID, DEFAULT_INSTRUMENT, BUFFER_MAX_MS, DEMO_TOOLS } from './config'
+import { instrumentFromCall } from './voice_link'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
@@ -122,7 +123,11 @@ const statsWriter = textWriter(4, 'stats')
 // ── Instrument, exercise queue, level ────────────────────────────────────
 const storage = bridgeStorage(bridge)
 // The speech step saves the instrument with saveInstrument(); until then use the default.
-const INSTRUMENT = (await loadInstrument(storage)) ?? byId(DEFAULT_INSTRUMENT) ?? byId('voice')!
+const fromCall = await instrumentFromCall(storage)
+if (fromCall) {
+  await saveInstrument(storage, fromCall) // check the exact signature in queue.ts
+}
+const INSTRUMENT = fromCall ?? (await loadInstrument(storage)) ?? byId(DEFAULT_INSTRUMENT) ?? byId('voice')!
 
 const LEVEL_KEY = 'tunein.level.v1'
 async function loadLevel(): Promise<LevelState> {

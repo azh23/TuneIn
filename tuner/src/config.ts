@@ -17,3 +17,7 @@ export const BUFFER_MAX_MS = 20_000
 /** Test buttons on the phone screen: skip ahead without playing, and see whether exercises came from Creao.
  *  Set to false before you submit. */
 export const DEMO_TOOLS = true
+
+
+export const VOICE_SERVER_URL = import.meta.env.VITE_VOICE_SERVER_URL ?? ''
+

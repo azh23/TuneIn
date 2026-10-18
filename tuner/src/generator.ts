@@ -158,6 +158,7 @@ function buildOne(inst: Instrument, level: number, rng: Rng): PracticeExercise |
   const notes: StaffNote[] = d.offsets.map((o, i) => ({ midi: root + o, beats: d.beats[i] }))
   const sig = notes.map(n => `${n.midi}/${n.beats}`).join(',')
   const eighths = d.beats.some(b => b === 0.5)
+  console.log("instrument being generated:", inst)
   return {
     id: `${inst.id}-L${level}-${fnv(d.title + sig)}`,
     instrumentId: inst.id,
