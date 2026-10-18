@@ -5,44 +5,50 @@ import {
   TextContainerUpgrade,
   OsEventTypeList,
 } from '@evenrealities/even_hub_sdk'
-import { startSttStream } from './asr/stt'
-import { mountUi, setStatus, setTranscript } from './ui'
+import { detectPitch, rms } from './pitch/detector'
+import { freqToNote } from './pitch/notes'
+import { mountUi, setStatus, setNote, setDebug } from './ui'
+import { BOX_W, BOX_PAD, tunerText, pausedText } from './glasses'
+
+const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
+const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
+const MIN_RMS = 0.01 // below this, treat as silence
+const MIN_CLARITY = 0.85
+const HOLD_MS = 600 // keep the last note on screen briefly after the sound stops
+const CENTS_SMOOTHING = 0.35 // EMA weight of the newest reading; lower is steadier
+const IDLE_TEXT = tunerText(null, null)
 
 mountUi()
 
-const API_KEY = import.meta.env.VITE_STT_API_KEY as string
-if (!API_KEY) {
-  setStatus('error', 'VITE_STT_API_KEY not set — copy .env.example to .env.local')
-  console.warn('VITE_STT_API_KEY is not set.')
-}
-
 const bridge = await waitForEvenAppBridge()
 
-const transcript = new TextContainerProperty({
+// Full-width box, vertically centered: three 27 px lines (note, scale, cents).
+const BOX_H = 3 * 27 + 2 * BOX_PAD
+const noteBox = new TextContainerProperty({
   xPosition: 0,
-  yPosition: 0,
-  width: 576,
-  height: 288,
+  yPosition: Math.round((288 - BOX_H) / 2),
+  width: BOX_W,
+  height: BOX_H,
   borderWidth: 0,
   borderColor: 5,
-  paddingLength: 4,
+  paddingLength: BOX_PAD,
   containerID: 1,
-  containerName: 'transcript',
-  content: 'Listening…',
+  containerName: 'note',
+  content: IDLE_TEXT,
   isEventCapture: 1,
 })
 
 const created = await bridge.createStartUpPageContainer(
-  new CreateStartUpPageContainer({ containerTotalNum: 1, textObject: [transcript] }),
+  new CreateStartUpPageContainer({ containerTotalNum: 1, textObject: [noteBox] }),
 )
 if (created !== 0) {
   setStatus('error', `createStartUpPageContainer failed: ${created}`)
   console.error('Failed to create startup page')
 }
 
-let lastRender = ''
+let lastRender = IDLE_TEXT
 let renderTimer: number | null = null
-let currentContent = 'Listening…'
+let currentContent = IDLE_TEXT
 
 function scheduleGlassesRender() {
   if (renderTimer !== null) return
@@ -53,56 +59,90 @@ function scheduleGlassesRender() {
     await bridge.textContainerUpgrade(
       new TextContainerUpgrade({
         containerID: 1,
-        containerName: 'transcript',
+        containerName: 'note',
         content: currentContent,
       }),
     )
   }, 120) // debounce display writes — BLE render queue is slow
 }
 
-// The default stt.ts is a blank stub that throws. Catch the throw so the UI
-// surfaces the "configure stt.ts" error chip instead of hanging on "Connecting…".
-let stt: ReturnType<typeof startSttStream> | null = null
-try {
-  stt = startSttStream(
-    API_KEY,
-    ({ finalText, interimText }) => {
-      const combined = (finalText + interimText).trim()
-      // 240 chars is a rough fit for the 576x288 text container at default font.
-      currentContent = combined ? combined.slice(-240) : 'Listening…'
-      setTranscript(finalText, interimText)
-      scheduleGlassesRender()
-    },
-    err => {
-      setStatus('error', `STT error: ${(err as Error)?.message ?? err}`)
-      console.error('STT error:', err)
-    },
+// Sliding window of the most recent WINDOW samples, as floats in [-1, 1].
+const window_ = new Float32Array(WINDOW)
+
+function pushPcm(chunk: Uint8Array) {
+  const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+  const n = Math.floor(chunk.byteLength / 2)
+  const keep = Math.max(0, WINDOW - n)
+  window_.copyWithin(0, WINDOW - keep)
+  const start = WINDOW - Math.min(n, WINDOW)
+  const skip = n - (WINDOW - start)
+  for (let i = start, j = skip; i < WINDOW; i++, j++) {
+    window_[i] = view.getInt16(j * 2, true) / 32768
+  }
+}
+
+// A new note has to show up twice in a row before it replaces the current
+// one, so a single noisy frame can't flash the wrong note.
+let shownNote: string | null = null
+let candidate: string | null = null
+let smoothCents: number | null = null
+let lastHeard = 0
+let frames = 0
+
+function analyze() {
+  const now = performance.now()
+  const level = rms(window_)
+  const pitch = level >= MIN_RMS ? detectPitch(window_, { sampleRate: SAMPLE_RATE }) : null
+  frames++
+  setDebug(
+    `mic frames: ${frames} · level ${level.toFixed(3)} (need ≥ ${MIN_RMS})` +
+      ` · clarity ${pitch ? pitch.clarity.toFixed(2) : '–'} (need ≥ ${MIN_CLARITY})`,
   )
-} catch (err) {
-  setStatus('error', (err as Error)?.message ?? 'STT startup failed')
-  console.error('STT startup failed:', err)
+
+  if (pitch && pitch.clarity >= MIN_CLARITY) {
+    const note = freqToNote(pitch.freq)
+    lastHeard = now
+    if (note.name === shownNote || note.name === candidate) {
+      // Smooth in cents, and start fresh on a note change so A and A# never
+      // get averaged together.
+      smoothCents =
+        note.name === shownNote && smoothCents !== null
+          ? smoothCents + CENTS_SMOOTHING * (note.cents - smoothCents)
+          : note.cents
+      shownNote = note.name
+      setNote(note.name, Math.round(smoothCents), `${note.name}${note.octave} · ${pitch.freq.toFixed(1)} Hz`)
+    }
+    candidate = note.name
+  } else if (shownNote !== null && now - lastHeard > HOLD_MS) {
+    shownNote = null
+    candidate = null
+    smoothCents = null
+    setNote(null)
+  }
+
+  currentContent = tunerText(shownNote, smoothCents === null ? null : Math.round(smoothCents))
+  scheduleGlassesRender()
 }
 
-let micOn = false
-if (stt) {
-  await bridge.audioControl(true)
-  micOn = true
-  setStatus('listening', 'Microphone live · tap to pause · double-tap to exit')
-}
+await bridge.audioControl(true)
+let micOn = true
+setStatus('listening', 'Listening · tap to pause · double-tap to exit')
 
-// Tap toggles capture. `audioControl(false)` stops the host pushing PCM, so no
-// further frames reach `sendPcm`; the STT client itself is left open. If your
-// provider closes an idle stream, tear it down here and reopen it on resume.
-// No-ops until stt.ts is wired up — there is no capture to pause.
+// Tap toggles capture. `audioControl(false)` stops the host pushing PCM.
 function toggleMic() {
-  if (!stt) return
   micOn = !micOn
   bridge.audioControl(micOn)
-  currentContent = micOn ? 'Listening…' : 'Paused'
+  if (!micOn) {
+    shownNote = null
+    candidate = null
+    smoothCents = null
+    setNote(null)
+  }
+  currentContent = micOn ? IDLE_TEXT : pausedText()
   scheduleGlassesRender()
   setStatus(
     micOn ? 'listening' : 'paused',
-    micOn ? 'Microphone live · tap to pause · double-tap to exit' : 'Paused · tap to resume · double-tap to exit',
+    micOn ? 'Listening · tap to pause · double-tap to exit' : 'Paused · tap to resume · double-tap to exit',
   )
 }
 
@@ -111,7 +151,6 @@ function cleanup() {
   if (cleanedUp) return
   cleanedUp = true
   bridge.audioControl(false)
-  stt?.close()
   unsubscribe()
 }
 
@@ -121,7 +160,7 @@ function cleanup() {
 // single tap arrives as an envelope whose `eventType` is `undefined`. The
 // default has to be resolved INSIDE the envelope check. Writing
 // `event.sysEvent?.eventType ?? OsEventTypeList.CLICK_EVENT` instead would
-// read CLICK on events that carry no `sysEvent` at all — and in this template
+// read CLICK on events that carry no `sysEvent` at all — and in this app
 // that means every incoming audio frame would fire the tap handler.
 function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeList | null {
   if (!envelope) return null
@@ -138,7 +177,10 @@ function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeLis
 //   • Check DOUBLE_CLICK_EVENT before CLICK_EVENT.
 const unsubscribe = bridge.onEvenHubEvent(event => {
   const pcm = event.audioEvent?.audioPcm
-  if (pcm) stt?.sendPcm(pcm)
+  if (pcm && micOn) {
+    pushPcm(pcm)
+    analyze()
+  }
 
   const sysType = eventTypeOf(event.sysEvent)
   const textType = eventTypeOf(event.textEvent)
