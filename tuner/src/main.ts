@@ -12,9 +12,13 @@ import { BOX_W, BOX_PAD, tunerText, pausedText } from './glasses'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
-const MIN_RMS = 0.01 // below this, treat as silence
-const MIN_CLARITY = 0.85
-const HOLD_MS = 600 // keep the last note on screen briefly after the sound stops
+// Hysteresis: strict to lock onto a new note, lenient to keep one, so a
+// sustained note that wavers or fades doesn't drop out halfway through.
+const ACQUIRE_RMS = 0.01
+const ACQUIRE_CLARITY = 0.85
+const SUSTAIN_RMS = 0.004
+const SUSTAIN_CLARITY = 0.6
+const HOLD_MS = 1000 // keep the last note on screen briefly after the sound stops
 const CENTS_SMOOTHING = 0.35 // EMA weight of the newest reading; lower is steadier
 const IDLE_TEXT = tunerText(null, null)
 
@@ -92,14 +96,21 @@ let frames = 0
 function analyze() {
   const now = performance.now()
   const level = rms(window_)
-  const pitch = level >= MIN_RMS ? detectPitch(window_, { sampleRate: SAMPLE_RATE }) : null
+  const minRms = shownNote === null ? ACQUIRE_RMS : SUSTAIN_RMS
+  const minClarity = shownNote === null ? ACQUIRE_CLARITY : SUSTAIN_CLARITY
+  const raw = level >= minRms ? detectPitch(window_, { sampleRate: SAMPLE_RATE }) : null
+  // While sustaining, only the current note may pass the lenient gate; a
+  // different note still has to meet the strict one.
+  const rawNote = raw && freqToNote(raw.freq).name
+  const gate = rawNote !== null && rawNote === shownNote ? minClarity : ACQUIRE_CLARITY
+  const pitch = raw && raw.clarity >= gate ? raw : null
   frames++
   setDebug(
-    `mic frames: ${frames} · level ${level.toFixed(3)} (need ≥ ${MIN_RMS})` +
-      ` · clarity ${pitch ? pitch.clarity.toFixed(2) : '–'} (need ≥ ${MIN_CLARITY})`,
+    `mic frames: ${frames} · level ${level.toFixed(3)} (need ≥ ${minRms})` +
+      ` · clarity ${raw ? raw.clarity.toFixed(2) : '–'} (need ≥ ${minClarity})`,
   )
 
-  if (pitch && pitch.clarity >= MIN_CLARITY) {
+  if (pitch) {
     const note = freqToNote(pitch.freq)
     lastHeard = now
     if (note.name === shownNote || note.name === candidate) {
