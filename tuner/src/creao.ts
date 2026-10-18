@@ -15,7 +15,9 @@ import type { StaffNote } from './staff'
 
 export interface CreaoOptions {
   /** Base URL of your proxy server, e.g. https://abc123.ngrok.app (add it to app.json's network whitelist). */
-  proxyUrl: string
+  proxyUrl?: string
+  /** Call Creao directly from the app (the key ships inside the app - use a capped, throwaway key). */
+  direct?: { key: string; appId: string; base?: string; userField?: string; payloadField?: string }
   /** How long the "Preparing…" screen may last. Default 20 s. */
   maxWaitMs?: number
   /** Stop waiting for the agent altogether after this long. Default 120 s. */
@@ -105,7 +107,87 @@ export function sanitizeAgentExercises(raw: unknown, inst: Instrument): Practice
 // ── talking to the proxy ─────────────────────────────────────────────────
 
 /** Ask the agent for exercises and wait (politely) for the run to finish. Throws on failure or give-up. */
+function parseLoose(text: unknown): unknown {
+  if (typeof text !== 'string') return null
+  const tries = [text.trim()]
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence) tries.push(fence[1].trim())
+  const a = text.indexOf('['), b = text.lastIndexOf(']')
+  if (a !== -1 && b > a) tries.push(text.slice(a, b + 1))
+  const c = text.indexOf('{'), d = text.lastIndexOf('}')
+  if (c !== -1 && d > c) tries.push(text.slice(c, d + 1))
+  for (const t of tries) {
+    try { return JSON.parse(t) } catch {}
+  }
+  return null
+}
+
+function toList(data: any): any[] {
+  if (Array.isArray(data)) return data
+  if (!data || typeof data !== 'object') return []
+  if (Array.isArray(data.exercises)) return data.exercises
+  if (Array.isArray(data.library)) return data.library
+  const out: any[] = []
+  for (const [k, v] of Object.entries(data)) {
+    if (Array.isArray(v) && /^\d+$/.test(k)) for (const e of v) out.push({ level: Number(k), ...(e as object) })
+  }
+  return out
+}
+
+async function extractDirect(result: any, auth: Record<string, string>): Promise<any[]> {
+  if (!result) return []
+  for (const text of [result.text, result.chatText]) {
+    const list = toList(parseLoose(text))
+    if (list.length) return list
+  }
+  for (const art of result.artifacts ?? []) {
+    const url = typeof art === 'string' ? art : art?.url
+    if (!url) continue
+    try {
+      const r = await fetch(url, { headers: auth })
+      const list = toList(parseLoose(await r.text()))
+      if (list.length) return list
+    } catch {}
+  }
+  return []
+}
+
+/** Same job as the proxy, run inside the app. */
+async function fetchDirect(inst: Instrument, opts: CreaoOptions): Promise<PracticeExercise[]> {
+  const d = opts.direct!
+  const base = `${(d.base ?? 'https://agent.creao.ai').replace(/\/+$/, '')}/api/v1/apps/${d.appId}/runs`
+  const auth = { Authorization: `Bearer ${d.key}` }
+  const payload = {
+    action: 'library',
+    instrumentId: inst.id,
+    levels: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    perLevel: Math.max(1, Math.min(6, opts.perLevel ?? 4)),
+    format: 'JSON array of {level,title,key,timeSig,tempoBpm,notes:[{midi,beats}]}',
+  }
+  const started = await http(base, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      inputs: { [d.userField ?? 'userId']: `tunein-${inst.id}`, [d.payloadField ?? 'payload']: JSON.stringify(payload) },
+    }),
+  })
+  const runId = String(started?.id ?? '')
+  if (!runId) throw new Error('creao did not return a run id')
+  const deadline = Date.now() + (opts.giveUpMs ?? 120_000)
+  let wait = opts.pollMs ?? 1500
+  while (Date.now() < deadline) {
+    await sleep(wait)
+    wait = Math.min(wait * 1.3, 5000)
+    const r = await http(`${base}/${encodeURIComponent(runId)}`, { headers: auth })
+    if (r?.status === 'completed') return sanitizeAgentExercises(await extractDirect(r.result, auth), inst)
+    if (r?.status === 'failed' || r?.status === 'cancelled') throw new Error(`agent run ${r.status}`)
+  }
+  throw new Error('agent took too long')
+}
+
 export async function fetchAgentExercises(inst: Instrument, opts: CreaoOptions): Promise<PracticeExercise[]> {
+  if (opts.direct) return fetchDirect(inst, opts)
+  if (!opts.proxyUrl) throw new Error('no agent address set')
   const base = opts.proxyUrl.replace(/\/+$/, '')
   const started = await http(`${base}/library`, {
     method: 'POST',
