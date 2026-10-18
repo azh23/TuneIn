@@ -7,6 +7,7 @@
 
 import { getTextWidth } from '@evenrealities/pretext'
 import type { Summary } from './scoring'
+import { tuningEmoji } from './pitch/notes'
 
 export const BOX_W = 576
 export const BOX_PAD = 4
@@ -33,16 +34,17 @@ function scale(cents: number | null): string {
   return `♭ ${slots.join('')} ♯`
 }
 
-/** Three lines: note name, needle scale, cents readout. `idleHint` replaces
- *  the bottom line while nothing is playing. */
+/** Four lines: feedback emoji, note name, needle scale, cents readout.
+ * `idleHint` replaces the bottom line while nothing is playing. */
 export function tunerText(note: string | null, cents: number | null, idleHint = 'Play a note'): string {
   if (note === null || cents === null) {
-    return [center('–'), center(scale(null)), center(idleHint)].join('\n')
+    return [center(''), center('–'), center(scale(null)), center(idleHint)].join('\n')
   }
   const inTune = Math.abs(cents) <= IN_TUNE_CENTS
+  const feedback = tuningEmoji(cents)
   const label = inTune ? `[ ${note} ]` : note
   const readout = inTune ? 'in tune' : cents > 0 ? `+${cents}¢  sharp` : `${cents}¢  flat`
-  return [center(label), center(scale(cents)), center(readout)].join('\n')
+  return [center(feedback), center(label), center(scale(cents)), center(readout)].join('\n')
 }
 
 /** Count-in beat `n` of `beats`: the number, a row of beat dots, the tempo. */

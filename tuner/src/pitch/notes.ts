@@ -9,6 +9,15 @@ export interface Note {
   midi: number
 }
 
+/** Feedback shown above the note based on distance from pitch center. */
+export function tuningEmoji(cents: number): string {
+  const distance = Math.abs(cents)
+  if (distance <= 5) return '🙂'
+  if (distance > 35) return '💔'
+  if (distance > 20) return '😐'
+  return ''
+}
+
 export function freqToNote(freq: number, a4 = 440): Note {
   const exact = 69 + 12 * Math.log2(freq / a4)
   const midi = Math.round(exact)

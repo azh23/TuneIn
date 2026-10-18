@@ -46,8 +46,8 @@ mountUi()
 
 const bridge = await waitForEvenAppBridge()
 
-// Full-width box, vertically centered: three 27 px lines (note, scale, cents).
-const BOX_H = 3 * 27 + 2 * BOX_PAD
+// Full-width box, vertically centered: four 27 px lines (feedback, note, scale, cents).
+const BOX_H = 4 * 27 + 2 * BOX_PAD
 const noteBox = new TextContainerProperty({
   xPosition: 0,
   yPosition: 288 - BOX_H - 4, // sits under the staff image

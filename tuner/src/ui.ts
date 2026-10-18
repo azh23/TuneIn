@@ -1,6 +1,9 @@
+import { tuningEmoji } from './pitch/notes'
+
 type Status = 'connecting' | 'listening' | 'paused' | 'error'
 
 let statusEl: HTMLDivElement
+let feedbackEl: HTMLDivElement
 let noteEl: HTMLDivElement
 let detailEl: HTMLDivElement
 let debugEl: HTMLDivElement
@@ -20,6 +23,7 @@ export function mountUi() {
       </header>
       <section class="readout" aria-live="polite">
         <div id="beat" class="beat"></div>
+        <div id="feedback" class="feedback" aria-hidden="true"></div>
         <div id="note" class="note idle">–</div>
         <div class="meter">
           <span class="flat">♭</span>
@@ -40,6 +44,7 @@ export function mountUi() {
     </main>
   `
   statusEl = app.querySelector<HTMLDivElement>('#status')!
+  feedbackEl = app.querySelector<HTMLDivElement>('#feedback')!
   noteEl = app.querySelector<HTMLDivElement>('#note')!
   detailEl = app.querySelector<HTMLDivElement>('#detail')!
   debugEl = app.querySelector<HTMLDivElement>('#debug')!
@@ -63,6 +68,7 @@ const IN_TUNE_CENTS = 5
 export function setNote(name: string | null, cents = 0, detail = '') {
   if (!noteEl) return
   const inTune = name !== null && Math.abs(cents) <= IN_TUNE_CENTS
+  feedbackEl.textContent = name === null ? '' : tuningEmoji(cents)
   noteEl.textContent = name ?? '–'
   noteEl.classList.toggle('idle', name === null)
   noteEl.classList.toggle('in-tune', inTune)
@@ -131,6 +137,7 @@ function injectStyles() {
     .readout { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
       background: #2E2E2E; border: 1px solid #3E3E3E; border-radius: 12px; padding: 20px;
       min-height: 220px; }
+    .feedback { height: 40px; font-size: 34px; line-height: 1; }
     .note { font-size: 120px; font-weight: 600; line-height: 1; color: #E5E5E5;
       font-variant-numeric: tabular-nums; }
     .note.idle { color: #5A5A5A; }
