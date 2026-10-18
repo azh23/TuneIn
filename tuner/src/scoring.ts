@@ -7,8 +7,16 @@ import { gradeRhythm, msPerBeat, type RhythmSummary } from './rhythm'
 
 /** Consecutive good readings needed before a note counts as played. */
 export const HITS_NEEDED = 3
-/** A reading only counts if it is within this many cents of the expected note. */
-export const MATCH_CENTS = 30
+/** A reading counts toward playing a note if it is within this many cents of
+ *  it. Generous on purpose: this decides "right note?", not "in tune?" (points
+ *  do that), and vibrato or a slightly flat voice shouldn't leave the player
+ *  stuck on a note. */
+export const MATCH_CENTS = 40
+/** Readings this close to the target (but past MATCH_CENTS) are vibrato
+ *  swings, not wrong notes: they neither count nor reset the streak. */
+const NEAR_CENTS = 100
+/** Within this many cents shows as "in tune" and earns full points. */
+export const IN_TUNE_CENTS = 10
 /** After a note is completed, ignore other readings briefly while the player moves on. */
 const GRACE_MS = 250
 /** Silence this long means the player let go of the note (so the same note can be played again). */
@@ -48,7 +56,7 @@ function median(xs: number[]): number {
 }
 
 function notePoints(absCents: number, wrongNotes: number): number {
-  const base = absCents <= 10 ? 10 : absCents <= 20 ? 8 : 6
+  const base = absCents <= IN_TUNE_CENTS ? 10 : absCents <= 20 ? 8 : absCents <= 30 ? 6 : 4
   return Math.max(0, base - 3 * wrongNotes)
 }
 
@@ -102,8 +110,11 @@ export class Session {
     return this.startedAt !== null
   }
 
-  private same(a: number, b: number): boolean {
-    return this.ignoreOctave ? (((a - b) % 12) + 12) % 12 === 0 : a === b
+  /** Signed cents from note `ref` to a reading (`midi` + `cents`). With
+   *  ignoreOctave, measured to the nearest octave of `ref` (-600..600). */
+  private dist(midi: number, cents: number, ref: number): number {
+    const c = (midi - ref) * 100 + cents
+    return this.ignoreOctave ? ((((c + 600) % 1200) + 1200) % 1200) - 600 : c
   }
 
   private finish(now: number) {
@@ -141,15 +152,22 @@ export class Session {
   feed(midi: number, cents: number, now: number): boolean {
     if (this.finished) return false
     this.silentSince = null
+    const next = this.exercise[this.step]?.midi
+    const toNext = next === undefined ? Infinity : Math.abs(this.dist(midi, cents, next))
 
     // The note we just finished is usually still ringing: it is neither right nor wrong.
     let changed = false
     if (this.heldMidi !== null) {
-      if (this.same(midi, this.heldMidi)) {
-        // Still holding the completed note: keep judging its intonation.
+      const toHeld = this.dist(midi, cents, this.heldMidi)
+      // Still the held note (vibrato and drift included) unless it is now
+      // closer to the next note, which matters for semitone steps like E→F.
+      if (Math.abs(toHeld) <= NEAR_CENTS && Math.abs(toHeld) < toNext) {
+        // Keep judging its intonation.
         const i = this.results.length - 1
-        this.samples[i].push(cents)
-        this.results[i].centsError = Math.round(median(this.samples[i]))
+        if (Math.abs(toHeld) <= 50) {
+          this.samples[i].push(toHeld)
+          this.results[i].centsError = Math.round(median(this.samples[i]))
+        }
         // Last note: finish once it has been held for its written length.
         if (this.step >= this.exercise.length && this.lastNoteLongEnough(now)) {
           this.finish(now)
@@ -165,17 +183,20 @@ export class Session {
         return true
       }
     }
+    const target = next!
+    const off = this.dist(midi, cents, target)
     // Brief settling time right after a completed note.
-    const target = this.exercise[this.step].midi
-    if (this.lastAt !== null && now - this.lastAt < GRACE_MS && !this.same(midi, target)) return changed
+    if (this.lastAt !== null && now - this.lastAt < GRACE_MS && Math.abs(off) > NEAR_CENTS) return changed
 
     if (this.startedAt === null) this.startedAt = now
 
-    if (this.same(midi, target)) {
+    if (Math.abs(off) <= MATCH_CENTS) {
       if (this.targetSince === null) this.targetSince = now
       this.wrongRun = 0
-      if (Math.abs(cents) <= MATCH_CENTS) this.good.push(cents)
-      else this.good = [] // right note but too far out: start the streak again
+      this.good.push(off)
+    } else if (Math.abs(off) <= NEAR_CENTS) {
+      // Close but not close enough (a vibrato swing): wait for the next reading.
+      return changed
     } else {
       this.good = []
       this.targetSince = null
@@ -197,7 +218,7 @@ export class Session {
     })
     this.targetSince = null
     this.lastAt = now
-    this.heldMidi = midi
+    this.heldMidi = target
     this.good = []
     this.wrongNow = 0
     this.step++

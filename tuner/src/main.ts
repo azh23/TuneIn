@@ -8,11 +8,12 @@ import {
 import { detectPitch, rms } from './pitch/detector'
 import { freqToNote } from './pitch/notes'
 import { mountUi, setStatus, setNote, setDebug, setProgress, setLastRun, setBeat } from './ui'
-import { BOX_W, BOX_PAD, BEAT_BOX_W, tunerText, countInText, resultsText, beatText, bufferText } from './glasses'
+import { BOX_W, BOX_PAD, BEAT_BOX_W, STATS_BOX_W, statsText, tunerText, countInText, resultsText, beatText, bufferText } from './glasses'
 import { SheetDisplay, sheetBox } from './sheet'
 import { Session, applySession, loadProgress, saveProgress, type Summary } from './scoring'
 import { midiName } from './pitch/notes'
 import { CountIn } from './metronome'
+import { LatestWriter } from './writer'
 import { byId } from './instruments'
 import { toSounding, type PracticeExercise } from './generator'
 import { ExerciseQueue, bridgeStorage, loadInstrument } from './queue'
@@ -78,13 +79,45 @@ const beatBox = new TextContainerProperty({
   isEventCapture: 0,
 })
 
+// Top-left corner (left of the staff image): level and best score.
+const statsBox = new TextContainerProperty({
+  xPosition: 4,
+  yPosition: 4,
+  width: STATS_BOX_W,
+  height: 2 * 27 + 2 * BOX_PAD,
+  borderWidth: 0,
+  borderColor: 5,
+  paddingLength: BOX_PAD,
+  containerID: 4,
+  containerName: 'stats',
+  content: ' ',
+  isEventCapture: 0,
+})
+
 const created = await bridge.createStartUpPageContainer(
-  new CreateStartUpPageContainer({ containerTotalNum: 3, textObject: [noteBox, beatBox], imageObject: [sheetBox] }),
+  new CreateStartUpPageContainer({
+    containerTotalNum: 4,
+    textObject: [noteBox, beatBox, statsBox],
+    imageObject: [sheetBox],
+  }),
 )
 if (created !== 0) {
   setStatus('error', `createStartUpPageContainer failed: ${created}`)
   console.error('Failed to create startup page')
 }
+
+// One write in flight per text box, newest content wins (see writer.ts).
+const textWriter = (containerID: number, containerName: string, gapMs = 0) =>
+  new LatestWriter<string>(
+    content => bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID, containerName, content })),
+    containerName,
+    gapMs,
+  )
+// The tuner text changes every audio frame; a short gap after each write
+// keeps it from hogging the link the beat dots and sheet image also need.
+const noteWriter = textWriter(1, 'note', 150)
+const beatWriter = textWriter(3, 'beat')
+const statsWriter = textWriter(4, 'stats')
 
 // ── Instrument, exercise queue, level ────────────────────────────────────
 const storage = bridgeStorage(bridge)
@@ -107,7 +140,7 @@ const saveLevel = () => void storage.set(LEVEL_KEY, JSON.stringify(levelState))
 // Buffer screen: stock the queue (and ask the agent) before the first exercise.
 const bufferMs = (ms: number) => {
   const text = bufferText(Math.round(ms / 1000), Math.round(BUFFER_MAX_MS / 1000))
-  void bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 1, containerName: 'note', content: text }))
+  noteWriter.write(text)
 }
 setStatus('paused', 'Getting your music ready…')
 if (created === 0) bufferMs(0)
@@ -124,6 +157,18 @@ if (PROXY_URL || CREAO_KEY) {
   queue = (await ExerciseQueue.load(storage, INSTRUMENT.id)) ?? (await ExerciseQueue.create(INSTRUMENT, storage))
 }
 let levelState = await loadLevel()
+
+// Best score (percent) per exercise id.
+const BEST_KEY = 'tunein.best.v1'
+async function loadBest(): Promise<Record<string, number>> {
+  try {
+    const raw = await storage.get(BEST_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {}
+  return {}
+}
+const best = await loadBest()
+const saveBest = () => void storage.set(BEST_KEY, JSON.stringify(best))
 
 // ── Sheet music + scoring ────────────────────────────────────────────────
 // The exercise stays the same until a run passes (PASS_AT); see finishSession.
@@ -156,6 +201,12 @@ function drawSheet() {
   setProgress(progress, session.marker, notes.length)
 }
 if (created === 0) drawSheet()
+
+/** Corner stats for the exercise that's up next. Changes only between runs. */
+function showStats() {
+  statsWriter.write(statsText(levelState.level, best[EXERCISE.id]))
+}
+if (created === 0) showStats()
 else setProgress(progress, session.step, EXERCISE.notes.length)
 
 function finishSession() {
@@ -168,6 +219,13 @@ function finishSession() {
   const runText = lastRunText(s) // before EXERCISE can change
   const pct = scorePercent(s.points, EXERCISE.notes.length)
   passed = pct >= PASS_AT
+  // "New best" only when beating an earlier score, not on the first try.
+  const prevBest = best[EXERCISE.id]
+  const newBest = prevBest !== undefined && Math.round(pct * 100) > prevBest
+  if (prevBest === undefined || Math.round(pct * 100) > prevBest) {
+    best[EXERCISE.id] = Math.round(pct * 100)
+    saveBest()
+  }
   const before = levelState.level
   const run = applyRun(levelState, pct)
   levelState = run.state
@@ -191,7 +249,9 @@ function finishSession() {
     tries = 0
     bpm = EXERCISE.tempoBpm
   }
-  resultsContent = resultsText(s, passed ? `Passed!  +${s.points} pts` : `Not yet  +${s.points} pts`, footer)
+  const headline = `${passed ? 'Passed!' : 'Not yet'}  +${s.points} pts${newBest ? '  ·  new best!' : ''}`
+  resultsContent = resultsText(s, headline, footer)
+  showStats()
   setLastRun(`${runText} · ${Math.round(pct * 100)}% · ${footer} · level ${levelState.level}`)
   setPhase('results')
 }
@@ -221,16 +281,11 @@ function setPhase(p: Phase) {
   setStatus(p === 'countIn' || p === 'playing' ? 'listening' : 'paused', HINTS[p]())
 }
 
-let lastBeat = ' '
-/** Show beat `n` of the bar in the corner (glasses + phone); null clears it.
- *  Sent right away, not debounced, so it lands on the beat. */
+/** Show beat `n` of the bar in the corner (glasses + phone); null clears it. */
 function showBeat(n: number | null) {
   const beats = EXERCISE.timeSig[0]
   setBeat(n, beats)
-  const content = beatText(n, beats)
-  if (content === lastBeat) return
-  lastBeat = content
-  void bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 3, containerName: 'beat', content }))
+  beatWriter.write(beatText(n, beats))
 }
 
 /** Back to the start: fresh run, waiting for a tap. */
@@ -251,7 +306,7 @@ function startCountIn() {
   if (bpm === null) {
     // Free tempo: no count-in, just start listening.
     setPhase('playing')
-    updateGlassesText(true)
+    updateGlassesText()
     return
   }
   const tempo = bpm
@@ -262,11 +317,11 @@ function startCountIn() {
     n => {
       countInContent = countInText(n, COUNT_IN_BEATS, tempo)
       setStatus('listening', `Count-in · ${n}`)
-      updateGlassesText(true)
+      updateGlassesText()
     },
     () => {
       setPhase('playing')
-      updateGlassesText(true)
+      updateGlassesText()
     },
     n => showBeat(n),
   )
@@ -291,43 +346,14 @@ function onSessionChange() {
   drawSheet()
 }
 
-let lastRender = IDLE_TEXT
-let renderTimer: number | null = null
-let currentContent = IDLE_TEXT
-
-function renderGlasses() {
-  if (currentContent === lastRender) return
-  lastRender = currentContent
-  void bridge.textContainerUpgrade(
-    new TextContainerUpgrade({
-      containerID: 1,
-      containerName: 'note',
-      content: currentContent,
-    }),
-  )
-}
-
-function scheduleGlassesRender() {
-  if (renderTimer !== null) return
-  renderTimer = window.setTimeout(() => {
-    renderTimer = null
-    renderGlasses()
-  }, 120) // debounce display writes — BLE render queue is slow
-}
-
-/** Pick the text-box content for the current phase. `now` skips the debounce
- *  (count-in beats should land on time). */
-function updateGlassesText(now = false) {
+/** Show the text-box content for the current phase on the glasses. */
+function updateGlassesText() {
   const cents = smoothCents === null ? null : Math.round(smoothCents)
-  currentContent =
+  noteWriter.write(
     phase === 'results' ? resultsContent
     : phase === 'countIn' ? countInContent
-    : tunerText(shownNote, cents, phase === 'ready' ? readyHint() : 'Play a note')
-  if (now) {
-    if (renderTimer !== null) clearTimeout(renderTimer)
-    renderTimer = null
-    renderGlasses()
-  } else scheduleGlassesRender()
+    : tunerText(shownNote, cents, phase === 'ready' ? readyHint() : 'Play a note'),
+  )
 }
 
 // Sliding window of the most recent WINDOW samples, as floats in [-1, 1].
@@ -405,8 +431,7 @@ function analyze() {
 // ready, and only the playing phase feeds the grader.
 await bridge.audioControl(true)
 setPhase('ready')
-lastRender = '' // the glasses may still show the buffer screen
-updateGlassesText(true)
+updateGlassesText()
 
 let cleanedUp = false
 function cleanup() {

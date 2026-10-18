@@ -12,7 +12,7 @@ export interface Note {
 /** Feedback shown above the note based on distance from pitch center. */
 export function tuningEmoji(cents: number): string {
   const distance = Math.abs(cents)
-  if (distance <= 5) return '🙂'
+  if (distance <= 10) return '🙂' // same as the grader's IN_TUNE_CENTS
   if (distance > 35) return '💔'
   if (distance > 20) return '😐'
   return ''
