@@ -28,6 +28,10 @@ export interface CreaoOptions {
   onBuffering?: (elapsedMs: number, maxWaitMs: number) => void
 }
 
+/** Plain-words status of the agent call, shown in the demo bar. */
+export let agentInfo = 'not asked yet'
+let lastRaw = ''
+
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
 async function http(url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<any> {
@@ -179,13 +183,34 @@ async function fetchDirect(inst: Instrument, opts: CreaoOptions): Promise<Practi
     await sleep(wait)
     wait = Math.min(wait * 1.3, 5000)
     const r = await http(`${base}/${encodeURIComponent(runId)}`, { headers: auth })
-    if (r?.status === 'completed') return sanitizeAgentExercises(await extractDirect(r.result, auth), inst)
+    if (r?.status === 'completed') {
+      const list = await extractDirect(r.result, auth)
+      lastRaw = String(r.result?.text ?? r.result?.chatText ?? JSON.stringify(r.result ?? '')).replace(/\s+/g, ' ').slice(0, 160)
+      return sanitizeAgentExercises(list, inst)
+    }
     if (r?.status === 'failed' || r?.status === 'cancelled') throw new Error(`agent run ${r.status}`)
   }
   throw new Error('agent took too long')
 }
 
 export async function fetchAgentExercises(inst: Instrument, opts: CreaoOptions): Promise<PracticeExercise[]> {
+  agentInfo = 'asking the agent…'
+  try {
+    const list = await fetchAgentExercisesInner(inst, opts)
+    agentInfo = list.length
+      ? `agent sent ${list.length} usable exercises`
+      : `agent answered but nothing usable (format?): ${lastRaw || 'empty reply'}`
+    return list
+  } catch (err) {
+    const msg = (err as Error)?.message ?? String(err)
+    agentInfo = /Failed to fetch|NetworkError|Load failed|aborted/i.test(msg)
+      ? `could not reach Creao (${msg}) - blocked by browser/whitelist, or timed out`
+      : `agent error: ${msg}`
+    throw err
+  }
+}
+
+async function fetchAgentExercisesInner(inst: Instrument, opts: CreaoOptions): Promise<PracticeExercise[]> {
   if (opts.direct) return fetchDirect(inst, opts)
   if (!opts.proxyUrl) throw new Error('no agent address set')
   const base = opts.proxyUrl.replace(/\/+$/, '')
