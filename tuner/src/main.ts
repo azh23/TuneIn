@@ -15,11 +15,11 @@ import { midiName } from './pitch/notes'
 import { CountIn } from './metronome'
 import { LatestWriter } from './writer'
 import { byId } from './instruments'
-import { toSounding, type PracticeExercise } from './generator'
+import { toSounding, MAX_LEVEL, type PracticeExercise } from './generator'
 import { ExerciseQueue, bridgeStorage, loadInstrument } from './queue'
 import { buildQueueWithAgent } from './creao'
 import { applyRun, initialLevel, scorePercent, PASS_AT, MAX_TRIES, type LevelState } from './leveling'
-import { PROXY_URL, CREAO_KEY, CREAO_APP_ID, DEFAULT_INSTRUMENT, BUFFER_MAX_MS } from './config'
+import { PROXY_URL, CREAO_KEY, CREAO_APP_ID, DEFAULT_INSTRUMENT, BUFFER_MAX_MS, DEMO_TOOLS } from './config'
 
 const SAMPLE_RATE = 16000 // G2 mic: PCM s16le @ 16 kHz mono
 const WINDOW = 2048 // ~128 ms; covers 2+ periods down to ~60 Hz
@@ -209,6 +209,14 @@ function showStats() {
 if (created === 0) showStats()
 else setProgress(progress, session.step, EXERCISE.notes.length)
 
+/** Called right after a passed exercise was marked seen. If that was the last new exercise at this level,
+ *  the level is cleared and the player moves up (don't make them repeat the same one). */
+function levelClearedUp(): boolean {
+  if (levelState.level >= MAX_LEVEL || queue.unseenAt(levelState.level) > 0) return false
+  levelState = { level: levelState.level + 1, upStreak: 0, downStreak: 0 }
+  return true
+}
+
 function finishSession() {
   const s = session.summary()
   progress = applySession(progress, s)
@@ -233,7 +241,8 @@ function finishSession() {
   if (passed) {
     tries = 0
     void queue.markSeen(EXERCISE.id)
-    footer = run.change === 'up' ? `Level up! Now level ${levelState.level}` : `Passed · ${Math.round(pct * 100)}% · tap for next`
+    const cleared = run.change !== 'up' && levelClearedUp()
+    footer = run.change === 'up' || cleared ? `Level up! Now level ${levelState.level}` : `Passed · ${Math.round(pct * 100)}% · tap for next`
   } else {
     tries++
     if (tries >= MAX_TRIES && levelState.level > 1 && run.change !== 'down') {
@@ -254,6 +263,72 @@ function finishSession() {
   showStats()
   setLastRun(`${runText} · ${Math.round(pct * 100)}% · ${footer} · level ${levelState.level}`)
   setPhase('results')
+}
+
+// ── Demo tools (phone screen only; set DEMO_TOOLS = false in config.ts to remove) ──
+if (DEMO_TOOLS) {
+  const bar = document.createElement('div')
+  bar.style.cssText =
+    'position:fixed;left:0;right:0;bottom:0;padding:10px;background:#2E2E2E;border-top:1px solid #3E3E3E;' +
+    'color:#E5E5E5;font:13px system-ui;display:flex;gap:8px;align-items:center;flex-wrap:wrap;z-index:9'
+  const info = document.createElement('span')
+  info.style.flex = '1 1 100%'
+  const mk = (label: string, fn: () => void) => {
+    const b = document.createElement('button')
+    b.textContent = label
+    b.style.cssText = 'padding:8px 12px;border-radius:8px;border:1px solid #3CFA44;background:#232323;color:#3CFA44;font:13px system-ui'
+    b.onclick = fn
+    bar.appendChild(b)
+  }
+  const refresh = () => {
+    info.textContent = `Level ${levelState.level} · "${EXERCISE.title}" · from ${EXERCISE.source === 'creao' ? 'CREAO AGENT' : 'built-in generator'} · agent exercises in queue: ${queue.hasCreao ? 'yes' : 'no'}`
+  }
+  const loadNext = () => {
+    EXERCISE = queue.next(levelState.level)
+    tries = 0
+    bpm = EXERCISE.tempoBpm
+    resetToReady()
+    showStats()
+    refresh()
+  }
+  mk('Pass (skip)', () => {
+    void queue.markSeen(EXERCISE.id)
+    const run = applyRun(levelState, 1)
+    levelState = run.state
+    if (run.change !== 'up') levelClearedUp()
+    saveLevel()
+    loadNext()
+  })
+  mk('Auto-play (perfect run)', () => {
+    // Feeds the scorer exact pitches at the exercise's tempo, skipping the microphone.
+    // Tests scoring, results, pass/level-up and the next exercise without any sound.
+    countIn.cancel()
+    session = newSession()
+    setPhase('playing')
+    const mpb = 60000 / (bpm ?? EXERCISE.tempoBpm)
+    let t = 1000
+    for (const n of toSounding(EXERCISE)) {
+      for (let k = 0; k < 4; k++) session.feed(n.midi, 0, t + k * 30)
+      t += n.beats * mpb
+    }
+    session.silence(t)
+    session.silence(t + 400)
+    onSessionChange()
+  })
+  mk('Level up', () => {
+    levelState = { level: Math.min(10, levelState.level + 1), upStreak: 0, downStreak: 0 }
+    saveLevel()
+    loadNext()
+  })
+  mk('Level down', () => {
+    levelState = { level: Math.max(1, levelState.level - 1), upStreak: 0, downStreak: 0 }
+    saveLevel()
+    loadNext()
+  })
+  bar.prepend(info)
+  document.body.appendChild(bar)
+  refresh()
+  setInterval(refresh, 2000)
 }
 
 function lastRunText(s: Summary): string {
