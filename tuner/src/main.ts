@@ -17,7 +17,7 @@ import { LatestWriter } from './writer'
 import { byId } from './instruments'
 import { toSounding, MAX_LEVEL, type PracticeExercise } from './generator'
 import { ExerciseQueue, bridgeStorage, loadInstrument } from './queue'
-import { buildQueueWithAgent } from './creao'
+import { buildQueueWithAgent, agentInfo } from './creao'
 import { applyRun, initialLevel, scorePercent, PASS_AT, MAX_TRIES, type LevelState } from './leveling'
 import { PROXY_URL, CREAO_KEY, CREAO_APP_ID, DEFAULT_INSTRUMENT, BUFFER_MAX_MS, DEMO_TOOLS } from './config'
 
@@ -281,7 +281,8 @@ if (DEMO_TOOLS) {
     bar.appendChild(b)
   }
   const refresh = () => {
-    info.textContent = `Level ${levelState.level} · "${EXERCISE.title}" · from ${EXERCISE.source === 'creao' ? 'CREAO AGENT' : 'built-in generator'} · agent exercises in queue: ${queue.hasCreao ? 'yes' : 'no'}`
+    const why = !PROXY_URL && !CREAO_KEY ? 'NO KEY: VITE_CREAO_KEY is empty (.env missing, or dev server not restarted)' : agentInfo
+    info.textContent = `Level ${levelState.level} · "${EXERCISE.title}" · from ${EXERCISE.source === 'creao' ? 'CREAO AGENT' : 'built-in generator'} · agent exercises in queue: ${queue.hasCreao ? 'yes' : 'no'} · ${why}`
   }
   const loadNext = () => {
     EXERCISE = queue.next(levelState.level)
